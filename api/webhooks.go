@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 
+	"github.com/pixll/atlas/build"
 	"github.com/pixll/atlas/store"
 	"github.com/pixll/atlas/webhook"
 )
@@ -14,10 +17,11 @@ const maxWebhookBody = 1 << 20 // 1 MiB
 type webhooksHandler struct {
 	store  *store.Store
 	secret string
+	worker *build.Worker
 }
 
-func RegisterWebhooks(mux *http.ServeMux, st *store.Store, secret string) {
-	h := &webhooksHandler{store: st, secret: secret}
+func RegisterWebhooks(mux *http.ServeMux, st *store.Store, secret string, worker *build.Worker) {
+	h := &webhooksHandler{store: st, secret: secret, worker: worker}
 	mux.HandleFunc("POST /webhooks/github", h.github)
 }
 
@@ -69,6 +73,14 @@ func (h *webhooksHandler) github(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create build")
 		return
+	}
+
+	if h.worker != nil {
+		go func(buildID string) {
+			if err := h.worker.Process(context.Background(), buildID); err != nil {
+				log.Printf("process build %s: %v", buildID, err)
+			}
+		}(b.ID)
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{

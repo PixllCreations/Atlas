@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/pixll/atlas/build"
 	"github.com/pixll/atlas/store"
 )
 
@@ -18,7 +19,7 @@ func New(addr string, st *store.Store, webhookSecret string) *Server {
 	RegisterApps(mux, st)
 	RegisterRepos(mux, st)
 	RegisterBuilds(mux, st)
-	RegisterWebhooks(mux, st, webhookSecret)
+	RegisterWebhooks(mux, st, webhookSecret, build.NewWorker(st))
 	return s
 }
 

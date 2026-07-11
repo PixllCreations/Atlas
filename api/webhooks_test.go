@@ -21,13 +21,13 @@ import (
 
 const testWebhookSecret = "test-webhook-secret"
 
-func testWebhooksServer(t *testing.T, st *store.Store, secret string) *httptest.Server {
+func testWebhooksServer(t *testing.T, st *store.Store, secret string, worker *build.Worker) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
 	RegisterApps(mux, st)
 	RegisterRepos(mux, st)
-	RegisterWebhooks(mux, st, secret)
+	RegisterWebhooks(mux, st, secret, worker)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -67,7 +67,7 @@ func postGitHubWebhook(t *testing.T, ts *httptest.Server, secret, eventType stri
 }
 
 func TestWebhook_NotPushEvent(t *testing.T) {
-	ts := testWebhooksServer(t, nil, testWebhookSecret)
+	ts := testWebhooksServer(t, nil, testWebhookSecret, nil)
 
 	resp := postGitHubWebhook(t, ts, testWebhookSecret, "ping", []byte(`{}`), signGitHubPayload(testWebhookSecret, []byte(`{}`)))
 	defer resp.Body.Close()
@@ -78,7 +78,7 @@ func TestWebhook_NotPushEvent(t *testing.T) {
 }
 
 func TestWebhook_InvalidSignature(t *testing.T) {
-	ts := testWebhooksServer(t, nil, testWebhookSecret)
+	ts := testWebhooksServer(t, nil, testWebhookSecret, nil)
 	body := githubPushBody("https://github.com/user/repo", "refs/heads/main")
 
 	resp := postGitHubWebhook(t, ts, testWebhookSecret, "push", body, "sha256=deadbeef")
@@ -91,7 +91,7 @@ func TestWebhook_InvalidSignature(t *testing.T) {
 }
 
 func TestWebhook_SecretNotConfigured(t *testing.T) {
-	ts := testWebhooksServer(t, nil, "")
+	ts := testWebhooksServer(t, nil, "", nil)
 	body := githubPushBody("https://github.com/user/repo", "refs/heads/main")
 
 	resp := postGitHubWebhook(t, ts, "", "push", body, signGitHubPayload("any-secret", body))
@@ -104,7 +104,7 @@ func TestWebhook_SecretNotConfigured(t *testing.T) {
 }
 
 func TestWebhook_InvalidPayload(t *testing.T) {
-	ts := testWebhooksServer(t, nil, testWebhookSecret)
+	ts := testWebhooksServer(t, nil, testWebhookSecret, nil)
 	body := []byte(`{not json`)
 
 	resp := postGitHubWebhook(t, ts, testWebhookSecret, "push", body, signGitHubPayload(testWebhookSecret, body))
@@ -117,7 +117,7 @@ func TestWebhook_InvalidPayload(t *testing.T) {
 }
 
 func TestWebhook_TagPushIgnored(t *testing.T) {
-	ts := testWebhooksServer(t, nil, testWebhookSecret)
+	ts := testWebhooksServer(t, nil, testWebhookSecret, nil)
 	body := githubPushBody("https://github.com/user/repo", "refs/tags/v1.0.0")
 
 	resp := postGitHubWebhook(t, ts, testWebhookSecret, "push", body, signGitHubPayload(testWebhookSecret, body))
@@ -155,15 +155,9 @@ func TestWebhook_AcceptedPush(t *testing.T) {
 		t.Fatal("build_id missing from response")
 	}
 
-	b, err := st.GetBuild(context.Background(), got["build_id"])
-	if err != nil {
-		t.Fatalf("GetBuild(%q): %v", got["build_id"], err)
-	}
+	b := waitForBuildStatus(t, st, got["build_id"], build.StatusSucceeded)
 	if b.AppID != app.ID {
 		t.Fatalf("build app_id = %q, want %q", b.AppID, app.ID)
-	}
-	if b.Status != build.StatusPending {
-		t.Fatalf("build status = %q, want %q", b.Status, build.StatusPending)
 	}
 }
 
@@ -211,5 +205,24 @@ func openWebhooksTestServer(t *testing.T) (*store.Store, *httptest.Server) {
 	t.Cleanup(func() { st.Close() })
 	ensureMigrations(t, ctx, dsn)
 
-	return st, testWebhooksServer(t, st, testWebhookSecret)
+	return st, testWebhooksServer(t, st, testWebhookSecret, build.NewWorker(st))
+}
+
+func waitForBuildStatus(t *testing.T, st *store.Store, buildID string, want build.Status) build.Build {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := st.GetBuild(context.Background(), buildID)
+		if err != nil {
+			t.Fatalf("GetBuild(%q): %v", buildID, err)
+		}
+		if b.Status == want {
+			return b
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("build %s did not reach status %q", buildID, want)
+	return build.Build{}
 }
