@@ -63,6 +63,7 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	}
 	worker := NewWorker(store)
 	worker.clone = func(context.Context, string, string, string) error { return nil }
+	worker.buildImage = func(context.Context, string, string) error { return nil }
 
 	if err := worker.Process(context.Background(), "build-1"); err != nil {
 		t.Fatalf("Process() = %v, want nil", err)

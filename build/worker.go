@@ -17,19 +17,31 @@ type Store interface {
 
 // Worker executes builds and updates their lifecycle status.
 type Worker struct {
-	store Store
-	clone func(ctx context.Context, url, branch, dest string) error
+	store      Store
+	clone      func(ctx context.Context, url, branch, dest string) error
+	buildImage func(ctx context.Context, contextDir, imageTag string) error
 }
 
 func NewWorker(store Store) *Worker {
-	return NewWorkerWithClone(store, CloneRepo)
+	return NewWorkerWithHooks(store, CloneRepo, BuildImage)
 }
 
 func NewWorkerWithClone(store Store, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
+	return NewWorkerWithHooks(store, clone, BuildImage)
+}
+
+func NewWorkerWithHooks(
+	store Store,
+	clone func(ctx context.Context, url, branch, dest string) error,
+	buildImage func(ctx context.Context, contextDir, imageTag string) error,
+) *Worker {
 	if clone == nil {
 		clone = CloneRepo
 	}
-	return &Worker{store: store, clone: clone}
+	if buildImage == nil {
+		buildImage = BuildImage
+	}
+	return &Worker{store: store, clone: clone, buildImage: buildImage}
 }
 
 // Process runs a single build by ID.
@@ -76,6 +88,14 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		return err
 	}
 
-	// Docker build and registry push come next.
+	if err := w.buildImage(ctx, src, imageTag(b)); err != nil {
+		return err
+	}
+
+	// Registry push comes next.
 	return nil
+}
+
+func imageTag(b Build) string {
+	return fmt.Sprintf("atlas/%s:%s", b.AppID, b.ID)
 }

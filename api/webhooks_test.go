@@ -205,9 +205,10 @@ func openWebhooksTestServer(t *testing.T) (*store.Store, *httptest.Server) {
 	t.Cleanup(func() { st.Close() })
 	ensureMigrations(t, ctx, dsn)
 
-	return st, testWebhooksServer(t, st, testWebhookSecret, build.NewWorkerWithClone(st, func(context.Context, string, string, string) error {
-		return nil
-	}))
+	return st, testWebhooksServer(t, st, testWebhookSecret, build.NewWorkerWithHooks(st,
+		func(context.Context, string, string, string) error { return nil },
+		func(context.Context, string, string) error { return nil },
+	))
 }
 
 func waitForBuildStatus(t *testing.T, st *store.Store, buildID string, want build.Status) build.Build {
