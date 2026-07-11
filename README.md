@@ -6,14 +6,15 @@ Inspired by Render, Heroku, and Railway — not a clone.
 
 ## Status
 
-**Phase 2 complete:** Git source linking and GitHub webhooks.
+**Phase 3 in progress:** Build records and history. Push webhooks enqueue `pending` builds; build execution (Docker/BuildKit) is next.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
 | 0 | Health check, dev tooling | Done |
 | 1 | Apps CRUD + Postgres | Done |
 | 2 | Git source + webhooks | Done |
-| 3+ | Builds, registry, k3s runtime | Planned |
+| 3 | Builds (records + history) | In progress |
+| 4+ | Build execution, registry, k3s runtime | Planned |
 
 ## Prerequisites
 
@@ -54,6 +55,13 @@ curl -X PUT http://localhost:8080/apps/{id}/repo \
   -d '{"url":"https://github.com/you/portfolio","branch":"main"}'
 ```
 
+Poll build history after a push:
+
+```bash
+curl http://localhost:8080/apps/{id}/builds
+curl http://localhost:8080/apps/{id}/builds/{build_id}
+```
+
 ### GitHub webhooks
 
 Atlas uses one webhook secret for the whole instance. Reuse the same value from `ATLAS_WEBHOOK_SECRET` on every GitHub webhook you create.
@@ -66,7 +74,7 @@ Atlas uses one webhook secret for the whole instance. Reuse the same value from 
    - **Secret:** same value as `ATLAS_WEBHOOK_SECRET`
    - **Events:** Just the push event
 
-Pushes to a linked repo and branch return `202 Accepted`. Unlinked repos, wrong branches, and non-push events are ignored with `204 No Content`.
+Pushes to a linked repo and branch return `202 Accepted` with `app_id` and `build_id`. Unlinked repos, wrong branches, and non-push events are ignored with `204 No Content`.
 
 ## API
 
@@ -80,7 +88,9 @@ Pushes to a linked repo and branch return `202 Accepted`. Unlinked repos, wrong 
 | `PUT` | `/apps/{id}/repo` | Link git repo (`{"url":"...","branch":"main"}`) |
 | `GET` | `/apps/{id}/repo` | Get linked repo |
 | `DELETE` | `/apps/{id}/repo` | Unlink repo |
-| `POST` | `/webhooks/github` | GitHub push webhook (signed) |
+| `GET` | `/apps/{id}/builds` | List builds for an app (newest first) |
+| `GET` | `/apps/{id}/builds/{build_id}` | Get build by ID |
+| `POST` | `/webhooks/github` | GitHub push webhook (signed; creates build) |
 
 ## Project layout
 
@@ -88,6 +98,7 @@ Pushes to a linked repo and branch return `202 Accepted`. Unlinked repos, wrong 
 Atlas/
 ├── api/              # HTTP server and handlers
 ├── app/              # App and Repo resource types
+├── build/            # Build resource type
 ├── webhook/          # GitHub webhook verification and parsing
 ├── store/            # Postgres persistence and migrations
 ├── cmd/api/          # API binary entrypoint
