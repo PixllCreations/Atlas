@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/pixll/atlas/store"
 )
 
 type Server struct {
@@ -9,10 +11,12 @@ type Server struct {
 	mux  *http.ServeMux
 }
 
-func New(addr string) *Server {
+// New creates a Server listening on addr with the given store for persistence.
+func New(addr string, st *store.Store) *Server {
 	mux := http.NewServeMux()
 	s := &Server{addr: addr, mux: mux}
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	RegisterApps(mux, st)
 	return s
 }
 
