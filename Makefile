@@ -2,7 +2,6 @@
 
 BINARY := atlas-api
 CMD := ./cmd/api
-MIGRATION := store/migrations/001_apps.sql
 
 .PHONY: help build run test db-up db-down db-logs migrate
 
@@ -14,7 +13,7 @@ help:
 	@echo "  db-up    Start Postgres via Docker Compose"
 	@echo "  db-down  Stop Postgres"
 	@echo "  db-logs  Follow Postgres logs"
-	@echo "  migrate  Apply database migrations"
+	@echo "  migrate  Apply pending database migrations"
 
 build:
 	go build -o $(BINARY) $(CMD)
@@ -34,5 +33,10 @@ db-down:
 db-logs:
 	docker compose logs -f postgres
 
+ifeq ($(OS),Windows_NT)
 migrate:
-	docker compose exec -T postgres psql -U atlas -d atlas -v ON_ERROR_STOP=1 < $(MIGRATION)
+	powershell -ExecutionPolicy Bypass -File hack/migrate.ps1
+else
+migrate:
+	bash hack/migrate.sh
+endif

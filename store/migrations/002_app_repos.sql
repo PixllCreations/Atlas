@@ -1,4 +1,4 @@
-CREATE TABLE app_repos (
+CREATE TABLE IF NOT EXISTS app_repos (
     app_id     UUID PRIMARY KEY REFERENCES apps(id) ON DELETE CASCADE,
     url        TEXT NOT NULL,
     provider   TEXT NOT NULL,
