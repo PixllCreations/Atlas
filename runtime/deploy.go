@@ -10,11 +10,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const defaultContainerPort int32 = 80
+
 // DeployOptions configures a Deployment for an app.
 type DeployOptions struct {
 	Namespace string
 	Name      string
 	Image     string
+	Port      int32
 }
 
 // EnsureDeployment creates or updates a Deployment to run image.
@@ -27,6 +30,9 @@ func (c *Client) EnsureDeployment(ctx context.Context, opts DeployOptions) error
 	}
 	if opts.Namespace == "" {
 		opts.Namespace = "default"
+	}
+	if opts.Port == 0 {
+		opts.Port = defaultContainerPort
 	}
 
 	dep := desiredDeployment(opts)
@@ -46,6 +52,7 @@ func (c *Client) EnsureDeployment(ctx context.Context, opts DeployOptions) error
 	}
 
 	existing.Spec.Template.Spec.Containers[0].Image = opts.Image
+	existing.Spec.Template.Spec.Containers[0].Ports = containerPorts(opts.Port)
 	_, err = apps.Update(ctx, existing, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("update deployment: %w", err)
@@ -79,6 +86,7 @@ func desiredDeployment(opts DeployOptions) *appsv1.Deployment {
 							Name:            opts.Name,
 							Image:           opts.Image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
+							Ports:           containerPorts(opts.Port),
 						},
 					},
 				},
@@ -89,4 +97,14 @@ func desiredDeployment(opts DeployOptions) *appsv1.Deployment {
 
 func int32Ptr(v int32) *int32 {
 	return &v
+}
+
+func containerPorts(port int32) []corev1.ContainerPort {
+	return []corev1.ContainerPort{
+		{
+			Name:          "http",
+			ContainerPort: port,
+			Protocol:      corev1.ProtocolTCP,
+		},
+	}
 }
