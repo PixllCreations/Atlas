@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pixll/atlas/app"
+	"github.com/pixll/atlas/runtime"
 )
 
 type fakeBuildStore struct {
@@ -96,6 +97,91 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	}
 	if got.Image != "localhost:5000/atlas/app-1:build-1" {
 		t.Fatalf("image = %q, want %q", got.Image, "localhost:5000/atlas/app-1:build-1")
+	}
+}
+
+type fakeDeployer struct {
+	buildJobOpts runtime.BuildJobOptions
+	waitNS       string
+	waitBuildID  string
+}
+
+func (f *fakeDeployer) EnsureBuildJob(_ context.Context, opts runtime.BuildJobOptions) error {
+	f.buildJobOpts = opts
+	return nil
+}
+
+func (f *fakeDeployer) WaitForBuildJob(_ context.Context, namespace, buildID string) error {
+	f.waitNS = namespace
+	f.waitBuildID = buildID
+	return nil
+}
+
+func (f *fakeDeployer) EnsureDeployment(context.Context, runtime.DeployOptions) error { return nil }
+func (f *fakeDeployer) EnsureService(context.Context, runtime.ServiceOptions) error    { return nil }
+func (f *fakeDeployer) EnsureIngress(context.Context, runtime.IngressOptions) error   { return nil }
+
+func TestWorker_ProcessPendingBuildJobPath(t *testing.T) {
+	now := time.Now()
+	store := newFakeBuildStore(Build{
+		ID:        "build-1",
+		AppID:     "app-1",
+		Status:    StatusPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	store.repos = map[string]app.Repo{
+		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
+	}
+	store.apps = map[string]app.App{
+		"app-1": {ID: "app-1", Name: "portfolio"},
+	}
+
+	deployer := &fakeDeployer{}
+	worker := NewWorker(store, WorkerConfig{
+		Registry:           "localhost:5000",
+		Namespace:          "default",
+		RegistrySecretName: "registry-creds",
+		InsecureRegistry:   true,
+	}, deployer)
+	worker.clone = func(context.Context, string, string, string) error {
+		t.Fatal("host clone should not run when job build is available")
+		return nil
+	}
+	worker.buildImage = func(context.Context, string, string) error {
+		t.Fatal("host build should not run when job build is available")
+		return nil
+	}
+	worker.pushImage = func(context.Context, string, string) error {
+		t.Fatal("host push should not run when job build is available")
+		return nil
+	}
+
+	if err := worker.Process(context.Background(), "build-1"); err != nil {
+		t.Fatalf("Process() = %v, want nil", err)
+	}
+
+	got := store.builds["build-1"]
+	if got.Status != StatusSucceeded {
+		t.Fatalf("status = %q, want %q", got.Status, StatusSucceeded)
+	}
+	if got.Image != "localhost:5000/atlas/app-1:build-1" {
+		t.Fatalf("image = %q, want %q", got.Image, "localhost:5000/atlas/app-1:build-1")
+	}
+	if deployer.buildJobOpts.BuildID != "build-1" {
+		t.Fatalf("BuildID = %q, want build-1", deployer.buildJobOpts.BuildID)
+	}
+	if deployer.buildJobOpts.Image != "localhost:5000/atlas/app-1:build-1" {
+		t.Fatalf("Image = %q, want localhost:5000/atlas/app-1:build-1", deployer.buildJobOpts.Image)
+	}
+	if deployer.buildJobOpts.RegistrySecretName != "registry-creds" {
+		t.Fatalf("RegistrySecretName = %q, want registry-creds", deployer.buildJobOpts.RegistrySecretName)
+	}
+	if !deployer.buildJobOpts.InsecureRegistry {
+		t.Fatal("InsecureRegistry = false, want true")
+	}
+	if deployer.waitBuildID != "build-1" {
+		t.Fatalf("wait build id = %q, want build-1", deployer.waitBuildID)
 	}
 }
 

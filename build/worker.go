@@ -18,8 +18,10 @@ type Store interface {
 	GetApp(ctx context.Context, id string) (app.App, error)
 }
 
-// Deployer applies a built image to the runtime cluster.
+// Deployer applies builds and deploys to the runtime cluster.
 type Deployer interface {
+	EnsureBuildJob(ctx context.Context, opts runtime.BuildJobOptions) error
+	WaitForBuildJob(ctx context.Context, namespace, buildID string) error
 	EnsureDeployment(ctx context.Context, opts runtime.DeployOptions) error
 	EnsureService(ctx context.Context, opts runtime.ServiceOptions) error
 	EnsureIngress(ctx context.Context, opts runtime.IngressOptions) error
@@ -27,11 +29,13 @@ type Deployer interface {
 
 // WorkerConfig holds runtime settings for the build worker.
 type WorkerConfig struct {
-	Registry         string
-	Namespace        string
-	IngressDomain    string
-	IngressClass     string
-	IngressTLSSecret string
+	Registry           string
+	Namespace          string
+	IngressDomain      string
+	IngressClass       string
+	IngressTLSSecret   string
+	RegistrySecretName string
+	InsecureRegistry   bool
 }
 
 // Worker executes builds and updates their lifecycle status.
@@ -112,64 +116,116 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		return fmt.Errorf("get repo: %w", err)
 	}
 
+	tag := imageTag(b)
+	var remote string
+
+	if w.useJobBuild() {
+		remote = RemoteImageTag(w.cfg.Registry, tag)
+		if err := w.runJobBuild(ctx, b, repo, remote); err != nil {
+			return err
+		}
+	} else {
+		remote, err = w.runHostBuild(ctx, b, repo, tag)
+		if err != nil {
+			return err
+		}
+	}
+
+	if remote == "" {
+		return nil
+	}
+
+	if _, err := w.store.UpdateBuildImage(ctx, b.ID, remote); err != nil {
+		return fmt.Errorf("save image: %w", err)
+	}
+
+	return w.deployApp(ctx, b, remote)
+}
+
+func (w *Worker) useJobBuild() bool {
+	return w.deployer != nil && w.cfg.Registry != ""
+}
+
+func (w *Worker) runHostBuild(ctx context.Context, b Build, repo app.Repo, tag string) (string, error) {
 	dir, err := os.MkdirTemp("", "atlas-build-*")
 	if err != nil {
-		return fmt.Errorf("create workdir: %w", err)
+		return "", fmt.Errorf("create workdir: %w", err)
 	}
 	defer os.RemoveAll(dir)
 
 	src := filepath.Join(dir, "src")
 	if err := w.clone(ctx, repo.URL, repo.Branch, src); err != nil {
-		return err
+		return "", err
 	}
 
-	tag := imageTag(b)
 	if err := w.buildImage(ctx, src, tag); err != nil {
-		return err
+		return "", err
 	}
 
-	if w.cfg.Registry != "" {
-		if err := w.pushImage(ctx, w.cfg.Registry, tag); err != nil {
-			return err
-		}
+	if w.cfg.Registry == "" {
+		return "", nil
+	}
 
-		remote := RemoteImageTag(w.cfg.Registry, tag)
-		if _, err := w.store.UpdateBuildImage(ctx, b.ID, remote); err != nil {
-			return fmt.Errorf("save image: %w", err)
-		}
+	if err := w.pushImage(ctx, w.cfg.Registry, tag); err != nil {
+		return "", err
+	}
 
-		if w.deployer != nil {
-			a, err := w.store.GetApp(ctx, b.AppID)
-			if err != nil {
-				return fmt.Errorf("get app: %w", err)
-			}
+	return RemoteImageTag(w.cfg.Registry, tag), nil
+}
 
-			if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
-				Namespace: w.cfg.Namespace,
-				Name:      a.Name,
-				Image:     remote,
-			}); err != nil {
-				return fmt.Errorf("deploy: %w", err)
-			}
+func (w *Worker) runJobBuild(ctx context.Context, b Build, repo app.Repo, remote string) error {
+	if err := w.deployer.EnsureBuildJob(ctx, runtime.BuildJobOptions{
+		Namespace:          w.cfg.Namespace,
+		BuildID:            b.ID,
+		RepoURL:            repo.URL,
+		Branch:             repo.Branch,
+		Image:              remote,
+		RegistrySecretName: w.cfg.RegistrySecretName,
+		InsecureRegistry:   w.cfg.InsecureRegistry,
+	}); err != nil {
+		return fmt.Errorf("create build job: %w", err)
+	}
 
-			if err := w.deployer.EnsureService(ctx, runtime.ServiceOptions{
-				Namespace: w.cfg.Namespace,
-				Name:      a.Name,
-			}); err != nil {
-				return fmt.Errorf("service: %w", err)
-			}
+	if err := w.deployer.WaitForBuildJob(ctx, w.cfg.Namespace, b.ID); err != nil {
+		return fmt.Errorf("build job: %w", err)
+	}
+	return nil
+}
 
-			if w.cfg.IngressDomain != "" {
-				if err := w.deployer.EnsureIngress(ctx, runtime.IngressOptions{
-					Namespace:        w.cfg.Namespace,
-					Name:             a.Name,
-					Host:             ingressHost(a.Name, w.cfg.IngressDomain),
-					IngressClassName: w.cfg.IngressClass,
-					TLSSecretName:    w.cfg.IngressTLSSecret,
-				}); err != nil {
-					return fmt.Errorf("ingress: %w", err)
-				}
-			}
+func (w *Worker) deployApp(ctx context.Context, b Build, remote string) error {
+	if w.deployer == nil {
+		return nil
+	}
+
+	a, err := w.store.GetApp(ctx, b.AppID)
+	if err != nil {
+		return fmt.Errorf("get app: %w", err)
+	}
+
+	if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
+		Namespace: w.cfg.Namespace,
+		Name:      a.Name,
+		Image:     remote,
+	}); err != nil {
+		return fmt.Errorf("deploy: %w", err)
+	}
+
+	if err := w.deployer.EnsureService(ctx, runtime.ServiceOptions{
+		Namespace: w.cfg.Namespace,
+		Name:      a.Name,
+	}); err != nil {
+		return fmt.Errorf("service: %w", err)
+	}
+
+	if w.cfg.IngressDomain != "" {
+		if err := w.deployer.EnsureIngress(ctx, runtime.IngressOptions{
+			Namespace:        w.cfg.Namespace,
+			Name:             a.Name,
+			Host:             ingressHost(a.Name, w.cfg.IngressDomain),
+			IngressClassName: w.cfg.IngressClass,
+			TLSSecretName:    w.cfg.IngressTLSSecret,
+		}); err != nil {
+			return fmt.Errorf("ingress: %w", err)
 		}
 	}
 
