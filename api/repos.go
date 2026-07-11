@@ -26,7 +26,6 @@ type reposHandler struct {
 	store *store.Store
 }
 
-// RegisterRepos mounts repository link routes on mux.
 func RegisterRepos(mux *http.ServeMux, st *store.Store) {
 	h := &reposHandler{store: st}
 	mux.HandleFunc("PUT /apps/{id}/repo", h.link)
