@@ -12,6 +12,7 @@ import (
 type fakeBuildStore struct {
 	builds map[string]Build
 	repos  map[string]app.Repo
+	apps   map[string]app.App
 }
 
 func newFakeBuildStore(builds ...Build) *fakeBuildStore {
@@ -20,6 +21,14 @@ func newFakeBuildStore(builds ...Build) *fakeBuildStore {
 		m[b.ID] = b
 	}
 	return &fakeBuildStore{builds: m}
+}
+
+func (f *fakeBuildStore) GetApp(_ context.Context, id string) (app.App, error) {
+	a, ok := f.apps[id]
+	if !ok {
+		return app.App{}, errors.New("app not found")
+	}
+	return a, nil
 }
 
 func (f *fakeBuildStore) GetRepo(_ context.Context, appID string) (app.Repo, error) {
@@ -61,7 +70,7 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	store.repos = map[string]app.Repo{
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
-	worker := NewWorker(store, "localhost:5000")
+	worker := NewWorker(store, "localhost:5000", nil, "")
 	worker.clone = func(context.Context, string, string, string) error { return nil }
 	worker.buildImage = func(context.Context, string, string) error { return nil }
 	worker.pushImage = func(context.Context, string, string) error { return nil }
@@ -85,7 +94,7 @@ func TestWorker_ProcessNonPendingBuild(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	worker := NewWorker(store, "")
+	worker := NewWorker(store, "", nil, "")
 
 	if err := worker.Process(context.Background(), "build-1"); err != nil {
 		t.Fatalf("Process() = %v, want nil", err)
@@ -98,7 +107,7 @@ func TestWorker_ProcessNonPendingBuild(t *testing.T) {
 }
 
 func TestWorker_ProcessBuildNotFound(t *testing.T) {
-	worker := NewWorker(newFakeBuildStore(), "")
+	worker := NewWorker(newFakeBuildStore(), "", nil, "")
 
 	err := worker.Process(context.Background(), "missing")
 	if err == nil {

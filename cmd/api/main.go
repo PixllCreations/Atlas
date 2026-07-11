@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/pixll/atlas/api"
+	"github.com/pixll/atlas/build"
+	"github.com/pixll/atlas/runtime"
 	"github.com/pixll/atlas/store"
 )
 
@@ -31,8 +33,16 @@ func main() {
 
 	webhookSecret := os.Getenv("ATLAS_WEBHOOK_SECRET")
 	registry := os.Getenv("ATLAS_REGISTRY_URL")
+	namespace := os.Getenv("ATLAS_K8S_NAMESPACE")
 
-	if err := api.New(addr, st, webhookSecret, registry).Run(); err != nil {
+	var deployer build.Deployer
+	if rt, err := runtime.New(os.Getenv("ATLAS_KUBECONFIG")); err != nil {
+		log.Printf("kubernetes unavailable, deploys disabled: %v", err)
+	} else {
+		deployer = rt
+	}
+
+	if err := api.New(addr, st, webhookSecret, registry, deployer, namespace).Run(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -8,7 +8,7 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
-	srv := New(":8080", nil, "", "")
+	srv := New(":8080", nil, "", "", nil, "")
 	ts := httptest.NewServer(srv.mux)
 	t.Cleanup(ts.Close)
 

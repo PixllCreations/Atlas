@@ -7,34 +7,45 @@ import (
 	"path/filepath"
 
 	"github.com/pixll/atlas/app"
+	"github.com/pixll/atlas/runtime"
 )
 
 type Store interface {
 	GetBuild(ctx context.Context, id string) (Build, error)
 	UpdateBuildStatus(ctx context.Context, id string, status Status) (Build, error)
 	GetRepo(ctx context.Context, appID string) (app.Repo, error)
+	GetApp(ctx context.Context, id string) (app.App, error)
+}
+
+// Deployer applies a built image to the runtime cluster.
+type Deployer interface {
+	EnsureDeployment(ctx context.Context, opts runtime.DeployOptions) error
 }
 
 // Worker executes builds and updates their lifecycle status.
 type Worker struct {
 	registry   string
+	namespace  string
 	store      Store
+	deployer   Deployer
 	clone      func(ctx context.Context, url, branch, dest string) error
 	buildImage func(ctx context.Context, contextDir, imageTag string) error
 	pushImage  func(ctx context.Context, registry, imageTag string) error
 }
 
-func NewWorker(store Store, registry string) *Worker {
-	return NewWorkerWithHooks(store, registry, CloneRepo, BuildImage, PushImage)
+func NewWorker(store Store, registry string, deployer Deployer, namespace string) *Worker {
+	return NewWorkerWithHooks(store, registry, namespace, deployer, CloneRepo, BuildImage, PushImage)
 }
 
-func NewWorkerWithClone(store Store, registry string, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
-	return NewWorkerWithHooks(store, registry, clone, BuildImage, PushImage)
+func NewWorkerWithClone(store Store, registry, namespace string, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
+	return NewWorkerWithHooks(store, registry, namespace, nil, clone, BuildImage, PushImage)
 }
 
 func NewWorkerWithHooks(
 	store Store,
 	registry string,
+	namespace string,
+	deployer Deployer,
 	clone func(ctx context.Context, url, branch, dest string) error,
 	buildImage func(ctx context.Context, contextDir, imageTag string) error,
 	pushImage func(ctx context.Context, registry, imageTag string) error,
@@ -50,7 +61,9 @@ func NewWorkerWithHooks(
 	}
 	return &Worker{
 		registry:   registry,
+		namespace:  namespace,
 		store:      store,
+		deployer:   deployer,
 		clone:      clone,
 		buildImage: buildImage,
 		pushImage:  pushImage,
@@ -109,6 +122,21 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 	if w.registry != "" {
 		if err := w.pushImage(ctx, w.registry, tag); err != nil {
 			return err
+		}
+
+		if w.deployer != nil {
+			a, err := w.store.GetApp(ctx, b.AppID)
+			if err != nil {
+				return fmt.Errorf("get app: %w", err)
+			}
+
+			if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
+				Namespace: w.namespace,
+				Name:      a.Name,
+				Image:     RemoteImageTag(w.registry, tag),
+			}); err != nil {
+				return fmt.Errorf("deploy: %w", err)
+			}
 		}
 	}
 
