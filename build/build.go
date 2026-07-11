@@ -17,6 +17,7 @@ type Build struct {
 	ID        string
 	AppID     string
 	Status    Status
+	Image     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

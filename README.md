@@ -6,7 +6,7 @@ Inspired by Render, Heroku, and Railway — not a clone.
 
 ## Status
 
-**Phase 4 in progress:** GitHub push → build → registry push → k3s Deployment. Reconciliation, ingress, and observability are next.
+**Phase 4 in progress:** GitHub push → build → registry push → k3s Deployment, Service, and Ingress. Reconciliation, TLS, and observability are next.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
@@ -14,8 +14,8 @@ Inspired by Render, Heroku, and Railway — not a clone.
 | 1 | Apps CRUD + Postgres | Done |
 | 2 | Git source + webhooks | Done |
 | 3 | Builds (clone, docker build, push) | Done |
-| 4 | k3s runtime (Deployments) | In progress |
-| 5+ | Reconciliation, ingress, observability | Planned |
+| 4 | k3s runtime (Deploy, Service, Ingress) | In progress |
+| 5+ | Reconciliation, TLS, observability | Planned |
 
 ## Prerequisites
 
@@ -24,7 +24,8 @@ Inspired by Render, Heroku, and Railway — not a clone.
 - `git` on PATH (clone step)
 - `make` (optional but recommended)
 - k3s or Kubernetes cluster + kubeconfig access (for deploys)
-- Local Docker registry (optional; required for k3s deploys — e.g. `localhost:5000`)
+- Local Docker registry (required for k3s deploys — e.g. `localhost:5000`)
+- DNS or `/etc/hosts` entries for `*.your-domain` (if using Ingress)
 
 ## Quick start
 
@@ -66,11 +67,17 @@ curl http://localhost:8080/apps/{id}/builds
 curl http://localhost:8080/apps/{id}/builds/{build_id}
 ```
 
-Check the Deployment on k3s:
+Check resources on k3s:
 
 ```bash
-kubectl get deployments -n default
+kubectl get deployments,services,ingress -n default
 kubectl get pods -n default -l app=portfolio
+```
+
+Open the app (with Ingress configured):
+
+```bash
+curl http://portfolio.homelab.local
 ```
 
 ### Build and deploy pipeline
@@ -80,17 +87,24 @@ On a matched GitHub push:
 ```text
 webhook → create build (pending) → worker (async)
   → git clone → docker build → docker push (if ATLAS_REGISTRY_URL set)
-  → EnsureDeployment on k3s (if cluster reachable)
+  → EnsureDeployment → EnsureService → EnsureIngress (if ATLAS_INGRESS_DOMAIN set)
   → build status: succeeded | failed
 ```
 
 Requirements for a full deploy:
 
 - Repo must contain a `Dockerfile` at the root
+- Container listens on port `80` (matches Service/Ingress defaults for now)
 - `git` and `docker` available on the host running `atlas-api`
 - `ATLAS_REGISTRY_URL` set so k3s can pull the image
 - k3s reachable via `ATLAS_KUBECONFIG`, in-cluster config, or default `~/.kube/config`
 - k3s configured to pull from your registry (e.g. insecure registry for `localhost:5000`)
+
+External access (optional):
+
+- Set `ATLAS_INGRESS_DOMAIN` (e.g. `homelab.local`) — apps get `<app>.<domain>` (e.g. `portfolio.homelab.local`)
+- Set `ATLAS_INGRESS_CLASS=traefik` on k3s (or leave empty to use cluster default)
+- Point DNS or `/etc/hosts` at your k3s node IP
 
 Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atlas/<app-id>:<build-id>`, and deployed as a Deployment named after the app (e.g. `portfolio`).
 
@@ -98,7 +112,7 @@ Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atl
 
 - Builds run on the host filesystem inside the API process, not in isolated k8s Jobs — builder isolation comes later.
 - If the cluster is unreachable, Atlas logs a warning and skips deploy; builds still run.
-- No Service or Ingress yet — pods run but are not externally reachable until a later phase.
+- TLS/HTTPS not configured yet — Ingress is HTTP only for now.
 
 ### GitHub webhooks
 
@@ -137,7 +151,7 @@ Atlas/
 ├── api/              # HTTP server and handlers
 ├── app/              # App and Repo resource types
 ├── build/            # Build type, worker, clone/build/push steps
-├── runtime/          # k3s client-go and Deployment helpers
+├── runtime/          # k3s client-go, Deployment, Service, Ingress
 ├── webhook/          # GitHub webhook verification and parsing
 ├── store/            # Postgres persistence and migrations
 ├── cmd/api/          # API binary entrypoint
@@ -163,6 +177,8 @@ cp .env.example .env
 | `ATLAS_REGISTRY_URL` | — | Docker registry host (e.g. `localhost:5000`); empty skips push and deploy |
 | `ATLAS_KUBECONFIG` | — | Path to kubeconfig; empty uses in-cluster or `~/.kube/config` |
 | `ATLAS_K8S_NAMESPACE` | `default` | Namespace for app Deployments |
+| `ATLAS_INGRESS_DOMAIN` | — | Base domain for apps (`portfolio.homelab.local`); empty skips Ingress |
+| `ATLAS_INGRESS_CLASS` | — | Ingress class (e.g. `traefik` on k3s) |
 | `ATLAS_DB_PASSWORD` | `atlas` | Compose Postgres password |
 | `ATLAS_DB_PORT` | `5432` | Compose host port |
 | `ATLAS_TEST_DATABASE_URL` | same as above | Postgres DSN for integration tests |
