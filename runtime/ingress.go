@@ -16,6 +16,7 @@ type IngressOptions struct {
 	Host             string
 	Port             int32
 	IngressClassName string
+	TLSSecretName    string
 }
 
 // EnsureIngress creates or updates an Ingress routing host to the app's Service.
@@ -51,6 +52,7 @@ func (c *Client) EnsureIngress(ctx context.Context, opts IngressOptions) error {
 
 	existing.Spec.IngressClassName = ingressClassName(opts.IngressClassName)
 	existing.Spec.Rules = ingressRules(opts)
+	existing.Spec.TLS = ingressTLS(opts)
 	_, err = ingresses.Update(ctx, existing, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("update ingress: %w", err)
@@ -73,6 +75,7 @@ func desiredIngress(opts IngressOptions) *networkingv1.Ingress {
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: className,
 			Rules:            ingressRules(opts),
+			TLS:              ingressTLS(opts),
 		},
 	}
 }
@@ -109,4 +112,16 @@ func ingressClassName(name string) *string {
 		return nil
 	}
 	return &name
+}
+
+func ingressTLS(opts IngressOptions) []networkingv1.IngressTLS {
+	if opts.TLSSecretName == "" {
+		return nil
+	}
+	return []networkingv1.IngressTLS{
+		{
+			Hosts:      []string{opts.Host},
+			SecretName: opts.TLSSecretName,
+		},
+	}
 }

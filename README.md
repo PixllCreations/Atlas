@@ -67,6 +67,21 @@ curl http://localhost:8080/apps/{id}/builds
 curl http://localhost:8080/apps/{id}/builds/{build_id}
 ```
 
+Example build response (after a successful push):
+
+```json
+{
+  "id": "…",
+  "app_id": "…",
+  "status": "succeeded",
+  "image": "localhost:5000/atlas/<app-id>:<build-id>",
+  "created_at": "2026-07-11T12:00:00Z",
+  "updated_at": "2026-07-11T12:01:30Z"
+}
+```
+
+`image` is empty until the worker pushes to the registry; it holds the full registry-qualified tag used for deploy.
+
 Check resources on k3s:
 
 ```bash
@@ -87,7 +102,7 @@ On a matched GitHub push:
 ```text
 webhook → create build (pending) → worker (async)
   → git clone → docker build → docker push (if ATLAS_REGISTRY_URL set)
-  → EnsureDeployment → EnsureService → EnsureIngress (if ATLAS_INGRESS_DOMAIN set)
+  → save image on build record → EnsureDeployment → EnsureService → EnsureIngress (if ATLAS_INGRESS_DOMAIN set)
   → build status: succeeded | failed
 ```
 
@@ -106,7 +121,7 @@ External access (optional):
 - Set `ATLAS_INGRESS_CLASS=traefik` on k3s (or leave empty to use cluster default)
 - Point DNS or `/etc/hosts` at your k3s node IP
 
-Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atlas/<app-id>:<build-id>`, and deployed as a Deployment named after the app (e.g. `portfolio`).
+Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atlas/<app-id>:<build-id>`, saved on the build record as `image`, and deployed as a Deployment named after the app (e.g. `portfolio`).
 
 **Notes:**
 
@@ -140,8 +155,8 @@ Pushes to a linked repo and branch return `202 Accepted` with `app_id` and `buil
 | `PUT` | `/apps/{id}/repo` | Link git repo (`{"url":"...","branch":"main"}`) |
 | `GET` | `/apps/{id}/repo` | Get linked repo |
 | `DELETE` | `/apps/{id}/repo` | Unlink repo |
-| `GET` | `/apps/{id}/builds` | List builds for an app (newest first) |
-| `GET` | `/apps/{id}/builds/{build_id}` | Get build by ID |
+| `GET` | `/apps/{id}/builds` | List builds for an app (newest first; includes `image`) |
+| `GET` | `/apps/{id}/builds/{build_id}` | Get build by ID (includes `image`, `status`, timestamps) |
 | `POST` | `/webhooks/github` | GitHub push webhook (signed; builds and deploys) |
 
 ## Project layout
