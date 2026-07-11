@@ -27,10 +27,11 @@ type Deployer interface {
 
 // WorkerConfig holds runtime settings for the build worker.
 type WorkerConfig struct {
-	Registry      string
-	Namespace     string
-	IngressDomain string
-	IngressClass  string
+	Registry         string
+	Namespace        string
+	IngressDomain    string
+	IngressClass     string
+	IngressTLSSecret string
 }
 
 // Worker executes builds and updates their lifecycle status.
@@ -164,6 +165,7 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 					Name:             a.Name,
 					Host:             ingressHost(a.Name, w.cfg.IngressDomain),
 					IngressClassName: w.cfg.IngressClass,
+					TLSSecretName:    w.cfg.IngressTLSSecret,
 				}); err != nil {
 					return fmt.Errorf("ingress: %w", err)
 				}
