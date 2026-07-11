@@ -124,6 +124,38 @@ func TestBuildsListAndGet(t *testing.T) {
 	if got.Status != string(build.StatusPending) {
 		t.Fatalf("status = %q, want %q", got.Status, build.StatusPending)
 	}
+	if got.Image != "" {
+		t.Fatalf("image = %q, want empty before push", got.Image)
+	}
+}
+
+func TestBuildImage_RoundTrip(t *testing.T) {
+	st, ts := openBuildsTestServer(t)
+	name := "builds-image-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	app := createApp(t, ts, name)
+
+	created, err := st.CreateBuild(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("CreateBuild: %v", err)
+	}
+
+	image := "localhost:5000/atlas/" + app.ID + ":" + created.ID
+	if _, err := st.UpdateBuildImage(context.Background(), created.ID, image); err != nil {
+		t.Fatalf("UpdateBuildImage: %v", err)
+	}
+
+	got := getBuild(t, ts, app.ID, created.ID)
+	if got.Image != image {
+		t.Fatalf("get image = %q, want %q", got.Image, image)
+	}
+
+	builds := listBuilds(t, ts, app.ID)
+	if len(builds) != 1 {
+		t.Fatalf("list builds len = %d, want 1", len(builds))
+	}
+	if builds[0].Image != image {
+		t.Fatalf("list image = %q, want %q", builds[0].Image, image)
+	}
 }
 
 func openBuildsTestServer(t *testing.T) (*store.Store, *httptest.Server) {

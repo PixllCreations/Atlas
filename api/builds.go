@@ -13,6 +13,7 @@ type buildResponse struct {
 	ID        string `json:"id"`
 	AppID     string `json:"app_id"`
 	Status    string `json:"status"`
+	Image     string `json:"image"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -95,6 +96,7 @@ func toBuildResponse(b build.Build) buildResponse {
 		ID:        b.ID,
 		AppID:     b.AppID,
 		Status:    string(b.Status),
+		Image:     b.Image,
 		CreatedAt: b.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt: b.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
