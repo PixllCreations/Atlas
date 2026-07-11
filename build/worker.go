@@ -17,23 +17,27 @@ type Store interface {
 
 // Worker executes builds and updates their lifecycle status.
 type Worker struct {
+	registry   string
 	store      Store
 	clone      func(ctx context.Context, url, branch, dest string) error
 	buildImage func(ctx context.Context, contextDir, imageTag string) error
+	pushImage  func(ctx context.Context, registry, imageTag string) error
 }
 
-func NewWorker(store Store) *Worker {
-	return NewWorkerWithHooks(store, CloneRepo, BuildImage)
+func NewWorker(store Store, registry string) *Worker {
+	return NewWorkerWithHooks(store, registry, CloneRepo, BuildImage, PushImage)
 }
 
-func NewWorkerWithClone(store Store, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
-	return NewWorkerWithHooks(store, clone, BuildImage)
+func NewWorkerWithClone(store Store, registry string, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
+	return NewWorkerWithHooks(store, registry, clone, BuildImage, PushImage)
 }
 
 func NewWorkerWithHooks(
 	store Store,
+	registry string,
 	clone func(ctx context.Context, url, branch, dest string) error,
 	buildImage func(ctx context.Context, contextDir, imageTag string) error,
+	pushImage func(ctx context.Context, registry, imageTag string) error,
 ) *Worker {
 	if clone == nil {
 		clone = CloneRepo
@@ -41,7 +45,16 @@ func NewWorkerWithHooks(
 	if buildImage == nil {
 		buildImage = BuildImage
 	}
-	return &Worker{store: store, clone: clone, buildImage: buildImage}
+	if pushImage == nil {
+		pushImage = PushImage
+	}
+	return &Worker{
+		registry:   registry,
+		store:      store,
+		clone:      clone,
+		buildImage: buildImage,
+		pushImage:  pushImage,
+	}
 }
 
 // Process runs a single build by ID.
@@ -88,11 +101,17 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		return err
 	}
 
-	if err := w.buildImage(ctx, src, imageTag(b)); err != nil {
+	tag := imageTag(b)
+	if err := w.buildImage(ctx, src, tag); err != nil {
 		return err
 	}
 
-	// Registry push comes next.
+	if w.registry != "" {
+		if err := w.pushImage(ctx, w.registry, tag); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
