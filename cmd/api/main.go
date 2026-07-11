@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/pixll/atlas/api"
 	"github.com/pixll/atlas/build"
@@ -34,11 +36,13 @@ func main() {
 	webhookSecret := os.Getenv("ATLAS_WEBHOOK_SECRET")
 
 	workerCfg := build.WorkerConfig{
-		Registry:         os.Getenv("ATLAS_REGISTRY_URL"),
-		Namespace:        os.Getenv("ATLAS_K8S_NAMESPACE"),
-		IngressDomain:    os.Getenv("ATLAS_INGRESS_DOMAIN"),
-		IngressClass:     os.Getenv("ATLAS_INGRESS_CLASS"),
-		IngressTLSSecret: os.Getenv("ATLAS_INGRESS_TLS_SECRET"),
+		Registry:           os.Getenv("ATLAS_REGISTRY_URL"),
+		Namespace:          os.Getenv("ATLAS_K8S_NAMESPACE"),
+		IngressDomain:      os.Getenv("ATLAS_INGRESS_DOMAIN"),
+		IngressClass:       os.Getenv("ATLAS_INGRESS_CLASS"),
+		IngressTLSSecret:   os.Getenv("ATLAS_INGRESS_TLS_SECRET"),
+		RegistrySecretName: os.Getenv("ATLAS_REGISTRY_SECRET"),
+		InsecureRegistry:   envBool("ATLAS_INSECURE_REGISTRY"),
 	}
 
 	var deployer build.Deployer
@@ -51,4 +55,17 @@ func main() {
 	if err := api.New(addr, st, webhookSecret, workerCfg, deployer).Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func envBool(key string) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Printf("invalid %s=%q, treating as false", key, v)
+		return false
+	}
+	return b
 }

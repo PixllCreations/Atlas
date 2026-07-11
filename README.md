@@ -14,16 +14,16 @@ Inspired by Render, Heroku, and Railway — not a clone.
 | 1 | Apps CRUD + Postgres | Done |
 | 2 | Git source + webhooks | Done |
 | 3 | Builds (clone, docker build, push) | Done |
-| 4 | k3s runtime (Deploy, Service, Ingress) | In progress |
+| 4 | k3s runtime (Deploy, Service, Ingress, TLS, Kaniko Job builds) | In progress |
 | 5+ | Reconciliation, observability | Planned |
 
 ## Prerequisites
 
 - Go 1.26+
-- Docker + Docker Compose (Docker daemon running for builds)
-- `git` on PATH (clone step)
+- Docker + Docker Compose (Docker daemon required only for host-fallback builds; k8s Job builds use Kaniko)
+- `git` on PATH (host-fallback clone step)
 - `make` (optional but recommended)
-- k3s or Kubernetes cluster + kubeconfig access (for deploys)
+- k3s or Kubernetes cluster + kubeconfig access (for deploys and isolated Job builds)
 - Local Docker registry (required for k3s deploys — e.g. `localhost:5000`)
 - DNS or `/etc/hosts` entries for `*.your-domain` (if using Ingress)
 
@@ -103,19 +103,26 @@ On a matched GitHub push:
 
 ```text
 webhook → create build (pending) → worker (async)
-  → git clone → docker build → docker push (if ATLAS_REGISTRY_URL set)
+  → build image (k8s Job with Kaniko, or host docker build as fallback)
   → save image on build record → EnsureDeployment → EnsureService → EnsureIngress (if ATLAS_INGRESS_DOMAIN set)
   → build status: succeeded | failed
 ```
 
+Atlas chooses a build strategy per build:
+
+- **Isolated k8s Job (preferred):** when a cluster is reachable and `ATLAS_REGISTRY_URL` is set, each build runs as an `atlas-build-<build-id>` Job — an init container does a shallow `git clone`, then [Kaniko](https://github.com/GoogleContainerTools/kaniko) builds the Dockerfile and pushes to the registry. No Docker daemon on the API host required.
+- **Host build (fallback):** when no cluster is available, the worker clones and runs `docker build` / `docker push` on the API host (requires `git` and `docker` on the host).
+
 Requirements for a full deploy:
 
 - Repo must contain a `Dockerfile` at the root
+- Public git repo (private repo credentials are not supported yet)
 - Container listens on port `80` (matches Service/Ingress defaults for now)
-- `git` and `docker` available on the host running `atlas-api`
 - `ATLAS_REGISTRY_URL` set so k3s can pull the image
 - k3s reachable via `ATLAS_KUBECONFIG`, in-cluster config, or default `~/.kube/config`
 - k3s configured to pull from your registry (e.g. insecure registry for `localhost:5000`)
+- For Job builds against an insecure registry, set `ATLAS_INSECURE_REGISTRY=true`
+- For registries that require auth, create a `dockerconfigjson` Secret and set `ATLAS_REGISTRY_SECRET` to its name
 
 External access (optional):
 
@@ -141,10 +148,27 @@ Then set:
 ATLAS_INGRESS_TLS_SECRET=homelab-tls
 ```
 
+Example registry auth secret (only if your registry requires login):
+
+```bash
+kubectl create secret docker-registry registry-creds \
+  --docker-server=registry.homelab.local \
+  --docker-username=<user> \
+  --docker-password=<pass> \
+  -n default
+```
+
+Then set:
+
+```bash
+ATLAS_REGISTRY_SECRET=registry-creds
+```
+
 **Notes:**
 
-- Builds run on the host filesystem inside the API process, not in isolated k8s Jobs — builder isolation comes later.
-- If the cluster is unreachable, Atlas logs a warning and skips deploy; builds still run.
+- When a cluster is reachable, builds run as isolated k8s Jobs (Kaniko); otherwise they fall back to host `docker build`.
+- The build worker waits synchronously for the Job to finish; build logs are not streamed yet.
+- If the cluster is unreachable, Atlas logs a warning and skips deploy; host builds still run.
 - Atlas references an existing TLS secret; it does not issue or renew certificates yet.
 
 ### GitHub webhooks
@@ -208,6 +232,8 @@ cp .env.example .env
 | `ATLAS_DATABASE_URL` | `postgres://atlas:atlas@localhost:5432/atlas?sslmode=disable` | Postgres DSN |
 | `ATLAS_WEBHOOK_SECRET` | — | HMAC secret for GitHub webhooks (required for webhook verification) |
 | `ATLAS_REGISTRY_URL` | — | Docker registry host (e.g. `localhost:5000`); empty skips push and deploy |
+| `ATLAS_REGISTRY_SECRET` | — | `dockerconfigjson` Secret name for Kaniko push auth; empty if registry needs no auth |
+| `ATLAS_INSECURE_REGISTRY` | `false` | Set `true` for insecure registries (e.g. `localhost:5000`) in Job builds |
 | `ATLAS_KUBECONFIG` | — | Path to kubeconfig; empty uses in-cluster or `~/.kube/config` |
 | `ATLAS_K8S_NAMESPACE` | `default` | Namespace for app Deployments |
 | `ATLAS_INGRESS_DOMAIN` | — | Base domain for apps (`portfolio.homelab.local`); empty skips Ingress |
