@@ -6,21 +6,23 @@ Inspired by Render, Heroku, and Railway — not a clone.
 
 ## Status
 
-**Phase 3 in progress:** Build records and history. Push webhooks enqueue `pending` builds; build execution (Docker/BuildKit) is next.
+**Phase 3 in progress:** Host-based build pipeline. GitHub pushes enqueue builds that clone source, run `docker build`, and optionally push to a registry. k3s deploys are next.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
 | 0 | Health check, dev tooling | Done |
 | 1 | Apps CRUD + Postgres | Done |
 | 2 | Git source + webhooks | Done |
-| 3 | Builds (records + history) | In progress |
-| 4+ | Build execution, registry, k3s runtime | Planned |
+| 3 | Builds (clone, docker build, push) | In progress |
+| 4+ | k3s runtime, reconciliation | Planned |
 
 ## Prerequisites
 
 - Go 1.25+
-- Docker + Docker Compose
+- Docker + Docker Compose (Docker daemon running for builds)
+- `git` on PATH (clone step)
 - `make` (optional but recommended)
+- Local Docker registry (optional; e.g. `localhost:5000` for push + k3s pulls)
 
 ## Quick start
 
@@ -62,6 +64,26 @@ curl http://localhost:8080/apps/{id}/builds
 curl http://localhost:8080/apps/{id}/builds/{build_id}
 ```
 
+### Build pipeline
+
+On a matched GitHub push:
+
+```text
+webhook → create build (pending) → worker (async)
+  → git clone → docker build → docker push (if ATLAS_REGISTRY_URL set)
+  → build status: succeeded | failed
+```
+
+Requirements for a successful build:
+
+- Repo must contain a `Dockerfile` at the root
+- `git` and `docker` available on the host running `atlas-api`
+- Set `ATLAS_REGISTRY_URL` to push images (leave empty to build locally only)
+
+Images are tagged `atlas/<app-id>:<build-id>` locally, then pushed as `<registry>/atlas/<app-id>:<build-id>`.
+
+**Note:** Builds currently run on the host filesystem inside the API process, not in isolated k8s Jobs. Builder isolation comes later.
+
 ### GitHub webhooks
 
 Atlas uses one webhook secret for the whole instance. Reuse the same value from `ATLAS_WEBHOOK_SECRET` on every GitHub webhook you create.
@@ -90,7 +112,7 @@ Pushes to a linked repo and branch return `202 Accepted` with `app_id` and `buil
 | `DELETE` | `/apps/{id}/repo` | Unlink repo |
 | `GET` | `/apps/{id}/builds` | List builds for an app (newest first) |
 | `GET` | `/apps/{id}/builds/{build_id}` | Get build by ID |
-| `POST` | `/webhooks/github` | GitHub push webhook (signed; creates build) |
+| `POST` | `/webhooks/github` | GitHub push webhook (signed; creates and runs build) |
 
 ## Project layout
 
@@ -98,7 +120,7 @@ Pushes to a linked repo and branch return `202 Accepted` with `app_id` and `buil
 Atlas/
 ├── api/              # HTTP server and handlers
 ├── app/              # App and Repo resource types
-├── build/            # Build resource type
+├── build/            # Build type, worker, clone/build/push steps
 ├── webhook/          # GitHub webhook verification and parsing
 ├── store/            # Postgres persistence and migrations
 ├── cmd/api/          # API binary entrypoint
@@ -121,6 +143,7 @@ cp .env.example .env
 | `ATLAS_PORT` | `8080` | HTTP listen port |
 | `ATLAS_DATABASE_URL` | `postgres://atlas:atlas@localhost:5432/atlas?sslmode=disable` | Postgres DSN |
 | `ATLAS_WEBHOOK_SECRET` | — | HMAC secret for GitHub webhooks (required for webhook verification) |
+| `ATLAS_REGISTRY_URL` | — | Docker registry host (e.g. `localhost:5000`); empty skips push |
 | `ATLAS_DB_PASSWORD` | `atlas` | Compose Postgres password |
 | `ATLAS_DB_PORT` | `5432` | Compose host port |
 | `ATLAS_TEST_DATABASE_URL` | same as above | Postgres DSN for integration tests |
