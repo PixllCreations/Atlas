@@ -6,23 +6,25 @@ Inspired by Render, Heroku, and Railway — not a clone.
 
 ## Status
 
-**Phase 3 in progress:** Host-based build pipeline. GitHub pushes enqueue builds that clone source, run `docker build`, and optionally push to a registry. k3s deploys are next.
+**Phase 4 in progress:** GitHub push → build → registry push → k3s Deployment. Reconciliation, ingress, and observability are next.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
 | 0 | Health check, dev tooling | Done |
 | 1 | Apps CRUD + Postgres | Done |
 | 2 | Git source + webhooks | Done |
-| 3 | Builds (clone, docker build, push) | In progress |
-| 4+ | k3s runtime, reconciliation | Planned |
+| 3 | Builds (clone, docker build, push) | Done |
+| 4 | k3s runtime (Deployments) | In progress |
+| 5+ | Reconciliation, ingress, observability | Planned |
 
 ## Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 - Docker + Docker Compose (Docker daemon running for builds)
 - `git` on PATH (clone step)
 - `make` (optional but recommended)
-- Local Docker registry (optional; e.g. `localhost:5000` for push + k3s pulls)
+- k3s or Kubernetes cluster + kubeconfig access (for deploys)
+- Local Docker registry (optional; required for k3s deploys — e.g. `localhost:5000`)
 
 ## Quick start
 
@@ -64,25 +66,39 @@ curl http://localhost:8080/apps/{id}/builds
 curl http://localhost:8080/apps/{id}/builds/{build_id}
 ```
 
-### Build pipeline
+Check the Deployment on k3s:
+
+```bash
+kubectl get deployments -n default
+kubectl get pods -n default -l app=portfolio
+```
+
+### Build and deploy pipeline
 
 On a matched GitHub push:
 
 ```text
 webhook → create build (pending) → worker (async)
   → git clone → docker build → docker push (if ATLAS_REGISTRY_URL set)
+  → EnsureDeployment on k3s (if cluster reachable)
   → build status: succeeded | failed
 ```
 
-Requirements for a successful build:
+Requirements for a full deploy:
 
 - Repo must contain a `Dockerfile` at the root
 - `git` and `docker` available on the host running `atlas-api`
-- Set `ATLAS_REGISTRY_URL` to push images (leave empty to build locally only)
+- `ATLAS_REGISTRY_URL` set so k3s can pull the image
+- k3s reachable via `ATLAS_KUBECONFIG`, in-cluster config, or default `~/.kube/config`
+- k3s configured to pull from your registry (e.g. insecure registry for `localhost:5000`)
 
-Images are tagged `atlas/<app-id>:<build-id>` locally, then pushed as `<registry>/atlas/<app-id>:<build-id>`.
+Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atlas/<app-id>:<build-id>`, and deployed as a Deployment named after the app (e.g. `portfolio`).
 
-**Note:** Builds currently run on the host filesystem inside the API process, not in isolated k8s Jobs. Builder isolation comes later.
+**Notes:**
+
+- Builds run on the host filesystem inside the API process, not in isolated k8s Jobs — builder isolation comes later.
+- If the cluster is unreachable, Atlas logs a warning and skips deploy; builds still run.
+- No Service or Ingress yet — pods run but are not externally reachable until a later phase.
 
 ### GitHub webhooks
 
@@ -112,7 +128,7 @@ Pushes to a linked repo and branch return `202 Accepted` with `app_id` and `buil
 | `DELETE` | `/apps/{id}/repo` | Unlink repo |
 | `GET` | `/apps/{id}/builds` | List builds for an app (newest first) |
 | `GET` | `/apps/{id}/builds/{build_id}` | Get build by ID |
-| `POST` | `/webhooks/github` | GitHub push webhook (signed; creates and runs build) |
+| `POST` | `/webhooks/github` | GitHub push webhook (signed; builds and deploys) |
 
 ## Project layout
 
@@ -121,6 +137,7 @@ Atlas/
 ├── api/              # HTTP server and handlers
 ├── app/              # App and Repo resource types
 ├── build/            # Build type, worker, clone/build/push steps
+├── runtime/          # k3s client-go and Deployment helpers
 ├── webhook/          # GitHub webhook verification and parsing
 ├── store/            # Postgres persistence and migrations
 ├── cmd/api/          # API binary entrypoint
@@ -143,7 +160,9 @@ cp .env.example .env
 | `ATLAS_PORT` | `8080` | HTTP listen port |
 | `ATLAS_DATABASE_URL` | `postgres://atlas:atlas@localhost:5432/atlas?sslmode=disable` | Postgres DSN |
 | `ATLAS_WEBHOOK_SECRET` | — | HMAC secret for GitHub webhooks (required for webhook verification) |
-| `ATLAS_REGISTRY_URL` | — | Docker registry host (e.g. `localhost:5000`); empty skips push |
+| `ATLAS_REGISTRY_URL` | — | Docker registry host (e.g. `localhost:5000`); empty skips push and deploy |
+| `ATLAS_KUBECONFIG` | — | Path to kubeconfig; empty uses in-cluster or `~/.kube/config` |
+| `ATLAS_K8S_NAMESPACE` | `default` | Namespace for app Deployments |
 | `ATLAS_DB_PASSWORD` | `atlas` | Compose Postgres password |
 | `ATLAS_DB_PORT` | `5432` | Compose host port |
 | `ATLAS_TEST_DATABASE_URL` | same as above | Postgres DSN for integration tests |
