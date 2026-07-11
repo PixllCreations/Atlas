@@ -13,6 +13,7 @@ import (
 type Store interface {
 	GetBuild(ctx context.Context, id string) (Build, error)
 	UpdateBuildStatus(ctx context.Context, id string, status Status) (Build, error)
+	UpdateBuildImage(ctx context.Context, id string, image string) (Build, error)
 	GetRepo(ctx context.Context, appID string) (app.Repo, error)
 	GetApp(ctx context.Context, id string) (app.App, error)
 }
@@ -131,6 +132,11 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 			return err
 		}
 
+		remote := RemoteImageTag(w.cfg.Registry, tag)
+		if _, err := w.store.UpdateBuildImage(ctx, b.ID, remote); err != nil {
+			return fmt.Errorf("save image: %w", err)
+		}
+
 		if w.deployer != nil {
 			a, err := w.store.GetApp(ctx, b.AppID)
 			if err != nil {
@@ -140,7 +146,7 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 			if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
 				Namespace: w.cfg.Namespace,
 				Name:      a.Name,
-				Image:     RemoteImageTag(w.cfg.Registry, tag),
+				Image:     remote,
 			}); err != nil {
 				return fmt.Errorf("deploy: %w", err)
 			}

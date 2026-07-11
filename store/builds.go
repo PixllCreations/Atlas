@@ -15,12 +15,12 @@ func (s *Store) CreateBuild(ctx context.Context, appID string) (build.Build, err
 	const q = `
 		INSERT INTO builds (app_id, status)
 		VALUES ($1, $2)
-		RETURNING id, app_id, status, created_at, updated_at
+		RETURNING id, app_id, status, image, created_at, updated_at
 	`
 
 	var b build.Build
 	err := s.pool.QueryRow(ctx, q, appID, build.StatusPending).
-		Scan(&b.ID, &b.AppID, &b.Status, &b.CreatedAt, &b.UpdatedAt)
+		Scan(&b.ID, &b.AppID, &b.Status, &b.Image, &b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return build.Build{}, fmt.Errorf("insert build: %w", err)
 	}
@@ -29,13 +29,13 @@ func (s *Store) CreateBuild(ctx context.Context, appID string) (build.Build, err
 
 func (s *Store) GetBuild(ctx context.Context, id string) (build.Build, error) {
 	const q = `
-		SELECT id, app_id, status, created_at, updated_at
+		SELECT id, app_id, status, image, created_at, updated_at
 		FROM builds
 		WHERE id = $1
 	`
 
 	var b build.Build
-	err := s.pool.QueryRow(ctx, q, id).Scan(&b.ID, &b.AppID, &b.Status, &b.CreatedAt, &b.UpdatedAt)
+	err := s.pool.QueryRow(ctx, q, id).Scan(&b.ID, &b.AppID, &b.Status, &b.Image, &b.CreatedAt, &b.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return build.Build{}, ErrBuildNotFound
 	}
@@ -47,7 +47,7 @@ func (s *Store) GetBuild(ctx context.Context, id string) (build.Build, error) {
 
 func (s *Store) ListBuildsByApp(ctx context.Context, appID string) ([]build.Build, error) {
 	const q = `
-		SELECT id, app_id, status, created_at, updated_at
+		SELECT id, app_id, status, image, created_at, updated_at
 		FROM builds
 		WHERE app_id = $1
 		ORDER BY created_at DESC
@@ -62,7 +62,7 @@ func (s *Store) ListBuildsByApp(ctx context.Context, appID string) ([]build.Buil
 	builds := make([]build.Build, 0)
 	for rows.Next() {
 		var b build.Build
-		if err := rows.Scan(&b.ID, &b.AppID, &b.Status, &b.CreatedAt, &b.UpdatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.AppID, &b.Status, &b.Image, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan build: %w", err)
 		}
 		builds = append(builds, b)
@@ -78,17 +78,37 @@ func (s *Store) UpdateBuildStatus(ctx context.Context, id string, status build.S
 		UPDATE builds
 		SET status = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, app_id, status, created_at, updated_at
+		RETURNING id, app_id, status, image, created_at, updated_at
 	`
 
 	var b build.Build
 	err := s.pool.QueryRow(ctx, q, id, status).
-		Scan(&b.ID, &b.AppID, &b.Status, &b.CreatedAt, &b.UpdatedAt)
+		Scan(&b.ID, &b.AppID, &b.Status, &b.Image, &b.CreatedAt, &b.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return build.Build{}, ErrBuildNotFound
 	}
 	if err != nil {
 		return build.Build{}, fmt.Errorf("update build status: %w", err)
+	}
+	return b, nil
+}
+
+func (s *Store) UpdateBuildImage(ctx context.Context, id string, image string) (build.Build, error) {
+	const q = `
+		UPDATE builds
+		SET image = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING id, app_id, status, image, created_at, updated_at
+	`
+
+	var b build.Build
+	err := s.pool.QueryRow(ctx, q, id, image).
+		Scan(&b.ID, &b.AppID, &b.Status, &b.Image, &b.CreatedAt, &b.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return build.Build{}, ErrBuildNotFound
+	}
+	if err != nil {
+		return build.Build{}, fmt.Errorf("update build image: %w", err)
 	}
 	return b, nil
 }

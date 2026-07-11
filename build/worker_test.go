@@ -58,6 +58,17 @@ func (f *fakeBuildStore) UpdateBuildStatus(_ context.Context, id string, status 
 	return b, nil
 }
 
+func (f *fakeBuildStore) UpdateBuildImage(_ context.Context, id string, image string) (Build, error) {
+	b, ok := f.builds[id]
+	if !ok {
+		return Build{}, errors.New("build not found")
+	}
+	b.Image = image
+	b.UpdatedAt = time.Now()
+	f.builds[id] = b
+	return b, nil
+}
+
 func TestWorker_ProcessPendingBuild(t *testing.T) {
 	now := time.Now()
 	store := newFakeBuildStore(Build{
@@ -82,6 +93,9 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	got := store.builds["build-1"]
 	if got.Status != StatusSucceeded {
 		t.Fatalf("status = %q, want %q", got.Status, StatusSucceeded)
+	}
+	if got.Image != "localhost:5000/atlas/app-1:build-1" {
+		t.Fatalf("image = %q, want %q", got.Image, "localhost:5000/atlas/app-1:build-1")
 	}
 }
 
