@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pixll/atlas/build"
 	"github.com/pixll/atlas/store"
 	"github.com/pixll/atlas/webhook"
 )
@@ -128,7 +129,7 @@ func TestWebhook_TagPushIgnored(t *testing.T) {
 }
 
 func TestWebhook_AcceptedPush(t *testing.T) {
-	_, ts := openWebhooksTestServer(t)
+	st, ts := openWebhooksTestServer(t)
 	name := "webhook-accept-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	app := createApp(t, ts, name)
 	repoURL := "https://github.com/user/" + name
@@ -149,6 +150,20 @@ func TestWebhook_AcceptedPush(t *testing.T) {
 	}
 	if got["app_id"] != app.ID {
 		t.Fatalf("app_id = %q, want %q", got["app_id"], app.ID)
+	}
+	if got["build_id"] == "" {
+		t.Fatal("build_id missing from response")
+	}
+
+	b, err := st.GetBuild(context.Background(), got["build_id"])
+	if err != nil {
+		t.Fatalf("GetBuild(%q): %v", got["build_id"], err)
+	}
+	if b.AppID != app.ID {
+		t.Fatalf("build app_id = %q, want %q", b.AppID, app.ID)
+	}
+	if b.Status != build.StatusPending {
+		t.Fatalf("build status = %q, want %q", b.Status, build.StatusPending)
 	}
 }
 
