@@ -20,6 +20,7 @@ type Store interface {
 // Deployer applies a built image to the runtime cluster.
 type Deployer interface {
 	EnsureDeployment(ctx context.Context, opts runtime.DeployOptions) error
+	EnsureService(ctx context.Context, opts runtime.ServiceOptions) error
 }
 
 // Worker executes builds and updates their lifecycle status.
@@ -136,6 +137,13 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 				Image:     RemoteImageTag(w.registry, tag),
 			}); err != nil {
 				return fmt.Errorf("deploy: %w", err)
+			}
+
+			if err := w.deployer.EnsureService(ctx, runtime.ServiceOptions{
+				Namespace: w.namespace,
+				Name:      a.Name,
+			}); err != nil {
+				return fmt.Errorf("service: %w", err)
 			}
 		}
 	}
