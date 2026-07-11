@@ -17,6 +17,7 @@ func New(addr string, st *store.Store, webhookSecret string) *Server {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	RegisterApps(mux, st)
 	RegisterRepos(mux, st)
+	RegisterBuilds(mux, st)
 	RegisterWebhooks(mux, st, webhookSecret)
 	return s
 }
