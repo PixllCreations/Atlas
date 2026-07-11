@@ -29,7 +29,9 @@ func main() {
 	}
 	addr := ":" + port
 
-	if err := api.New(addr, st).Run(); err != nil {
+	webhookSecret := os.Getenv("ATLAS_WEBHOOK_SECRET")
+
+	if err := api.New(addr, st, webhookSecret).Run(); err != nil {
 		log.Fatal(err)
 	}
 }
