@@ -65,9 +65,15 @@ func (h *webhooksHandler) github(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Phase 3 will enqueue a build here. For now, acknowledge the push.
+	b, err := h.store.CreateBuild(r.Context(), appID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create build")
+		return
+	}
+
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "accepted",
-		"app_id": appID,
+		"status":   "accepted",
+		"app_id":   appID,
+		"build_id": b.ID,
 	})
 }
