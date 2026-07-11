@@ -32,8 +32,13 @@ func main() {
 	addr := ":" + port
 
 	webhookSecret := os.Getenv("ATLAS_WEBHOOK_SECRET")
-	registry := os.Getenv("ATLAS_REGISTRY_URL")
-	namespace := os.Getenv("ATLAS_K8S_NAMESPACE")
+
+	workerCfg := build.WorkerConfig{
+		Registry:      os.Getenv("ATLAS_REGISTRY_URL"),
+		Namespace:     os.Getenv("ATLAS_K8S_NAMESPACE"),
+		IngressDomain: os.Getenv("ATLAS_INGRESS_DOMAIN"),
+		IngressClass:  os.Getenv("ATLAS_INGRESS_CLASS"),
+	}
 
 	var deployer build.Deployer
 	if rt, err := runtime.New(os.Getenv("ATLAS_KUBECONFIG")); err != nil {
@@ -42,7 +47,7 @@ func main() {
 		deployer = rt
 	}
 
-	if err := api.New(addr, st, webhookSecret, registry, deployer, namespace).Run(); err != nil {
+	if err := api.New(addr, st, webhookSecret, workerCfg, deployer).Run(); err != nil {
 		log.Fatal(err)
 	}
 }

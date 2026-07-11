@@ -70,7 +70,7 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	store.repos = map[string]app.Repo{
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
-	worker := NewWorker(store, "localhost:5000", nil, "")
+	worker := NewWorker(store, WorkerConfig{Registry: "localhost:5000"}, nil)
 	worker.clone = func(context.Context, string, string, string) error { return nil }
 	worker.buildImage = func(context.Context, string, string) error { return nil }
 	worker.pushImage = func(context.Context, string, string) error { return nil }
@@ -94,7 +94,7 @@ func TestWorker_ProcessNonPendingBuild(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	worker := NewWorker(store, "", nil, "")
+	worker := NewWorker(store, WorkerConfig{}, nil)
 
 	if err := worker.Process(context.Background(), "build-1"); err != nil {
 		t.Fatalf("Process() = %v, want nil", err)
@@ -107,7 +107,7 @@ func TestWorker_ProcessNonPendingBuild(t *testing.T) {
 }
 
 func TestWorker_ProcessBuildNotFound(t *testing.T) {
-	worker := NewWorker(newFakeBuildStore(), "", nil, "")
+	worker := NewWorker(newFakeBuildStore(), WorkerConfig{}, nil)
 
 	err := worker.Process(context.Background(), "missing")
 	if err == nil {

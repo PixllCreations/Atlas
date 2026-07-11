@@ -21,12 +21,20 @@ type Store interface {
 type Deployer interface {
 	EnsureDeployment(ctx context.Context, opts runtime.DeployOptions) error
 	EnsureService(ctx context.Context, opts runtime.ServiceOptions) error
+	EnsureIngress(ctx context.Context, opts runtime.IngressOptions) error
+}
+
+// WorkerConfig holds runtime settings for the build worker.
+type WorkerConfig struct {
+	Registry      string
+	Namespace     string
+	IngressDomain string
+	IngressClass  string
 }
 
 // Worker executes builds and updates their lifecycle status.
 type Worker struct {
-	registry   string
-	namespace  string
+	cfg        WorkerConfig
 	store      Store
 	deployer   Deployer
 	clone      func(ctx context.Context, url, branch, dest string) error
@@ -34,18 +42,17 @@ type Worker struct {
 	pushImage  func(ctx context.Context, registry, imageTag string) error
 }
 
-func NewWorker(store Store, registry string, deployer Deployer, namespace string) *Worker {
-	return NewWorkerWithHooks(store, registry, namespace, deployer, CloneRepo, BuildImage, PushImage)
+func NewWorker(store Store, cfg WorkerConfig, deployer Deployer) *Worker {
+	return NewWorkerWithHooks(store, cfg, deployer, CloneRepo, BuildImage, PushImage)
 }
 
-func NewWorkerWithClone(store Store, registry, namespace string, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
-	return NewWorkerWithHooks(store, registry, namespace, nil, clone, BuildImage, PushImage)
+func NewWorkerWithClone(store Store, cfg WorkerConfig, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
+	return NewWorkerWithHooks(store, cfg, nil, clone, BuildImage, PushImage)
 }
 
 func NewWorkerWithHooks(
 	store Store,
-	registry string,
-	namespace string,
+	cfg WorkerConfig,
 	deployer Deployer,
 	clone func(ctx context.Context, url, branch, dest string) error,
 	buildImage func(ctx context.Context, contextDir, imageTag string) error,
@@ -61,8 +68,7 @@ func NewWorkerWithHooks(
 		pushImage = PushImage
 	}
 	return &Worker{
-		registry:   registry,
-		namespace:  namespace,
+		cfg:        cfg,
 		store:      store,
 		deployer:   deployer,
 		clone:      clone,
@@ -120,8 +126,8 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		return err
 	}
 
-	if w.registry != "" {
-		if err := w.pushImage(ctx, w.registry, tag); err != nil {
+	if w.cfg.Registry != "" {
+		if err := w.pushImage(ctx, w.cfg.Registry, tag); err != nil {
 			return err
 		}
 
@@ -132,18 +138,29 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 			}
 
 			if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
-				Namespace: w.namespace,
+				Namespace: w.cfg.Namespace,
 				Name:      a.Name,
-				Image:     RemoteImageTag(w.registry, tag),
+				Image:     RemoteImageTag(w.cfg.Registry, tag),
 			}); err != nil {
 				return fmt.Errorf("deploy: %w", err)
 			}
 
 			if err := w.deployer.EnsureService(ctx, runtime.ServiceOptions{
-				Namespace: w.namespace,
+				Namespace: w.cfg.Namespace,
 				Name:      a.Name,
 			}); err != nil {
 				return fmt.Errorf("service: %w", err)
+			}
+
+			if w.cfg.IngressDomain != "" {
+				if err := w.deployer.EnsureIngress(ctx, runtime.IngressOptions{
+					Namespace:        w.cfg.Namespace,
+					Name:             a.Name,
+					Host:             ingressHost(a.Name, w.cfg.IngressDomain),
+					IngressClassName: w.cfg.IngressClass,
+				}); err != nil {
+					return fmt.Errorf("ingress: %w", err)
+				}
 			}
 		}
 	}
@@ -153,4 +170,8 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 
 func imageTag(b Build) string {
 	return fmt.Sprintf("atlas/%s:%s", b.AppID, b.ID)
+}
+
+func ingressHost(appName, domain string) string {
+	return appName + "." + domain
 }

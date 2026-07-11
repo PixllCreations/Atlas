@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/pixll/atlas/build"
 )
 
 func TestHealthz(t *testing.T) {
-	srv := New(":8080", nil, "", "", nil, "")
+	srv := New(":8080", nil, "", build.WorkerConfig{}, nil)
 	ts := httptest.NewServer(srv.mux)
 	t.Cleanup(ts.Close)
 

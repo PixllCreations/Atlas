@@ -12,14 +12,14 @@ type Server struct {
 	mux  *http.ServeMux
 }
 
-func New(addr string, st *store.Store, webhookSecret, registry string, deployer build.Deployer, namespace string) *Server {
+func New(addr string, st *store.Store, webhookSecret string, cfg build.WorkerConfig, deployer build.Deployer) *Server {
 	mux := http.NewServeMux()
 	s := &Server{addr: addr, mux: mux}
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	RegisterApps(mux, st)
 	RegisterRepos(mux, st)
 	RegisterBuilds(mux, st)
-	RegisterWebhooks(mux, st, webhookSecret, build.NewWorker(st, registry, deployer, namespace))
+	RegisterWebhooks(mux, st, webhookSecret, build.NewWorker(st, cfg, deployer))
 	return s
 }
 
