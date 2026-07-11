@@ -5,10 +5,13 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/pixll/atlas/app"
 )
 
 type fakeBuildStore struct {
 	builds map[string]Build
+	repos  map[string]app.Repo
 }
 
 func newFakeBuildStore(builds ...Build) *fakeBuildStore {
@@ -17,6 +20,14 @@ func newFakeBuildStore(builds ...Build) *fakeBuildStore {
 		m[b.ID] = b
 	}
 	return &fakeBuildStore{builds: m}
+}
+
+func (f *fakeBuildStore) GetRepo(_ context.Context, appID string) (app.Repo, error) {
+	repo, ok := f.repos[appID]
+	if !ok {
+		return app.Repo{}, errors.New("repo not found")
+	}
+	return repo, nil
 }
 
 func (f *fakeBuildStore) GetBuild(_ context.Context, id string) (Build, error) {
@@ -47,7 +58,11 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
+	store.repos = map[string]app.Repo{
+		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
+	}
 	worker := NewWorker(store)
+	worker.clone = func(context.Context, string, string, string) error { return nil }
 
 	if err := worker.Process(context.Background(), "build-1"); err != nil {
 		t.Fatalf("Process() = %v, want nil", err)

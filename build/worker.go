@@ -3,20 +3,33 @@ package build
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/pixll/atlas/app"
 )
 
 type Store interface {
 	GetBuild(ctx context.Context, id string) (Build, error)
 	UpdateBuildStatus(ctx context.Context, id string, status Status) (Build, error)
+	GetRepo(ctx context.Context, appID string) (app.Repo, error)
 }
 
 // Worker executes builds and updates their lifecycle status.
 type Worker struct {
 	store Store
+	clone func(ctx context.Context, url, branch, dest string) error
 }
 
 func NewWorker(store Store) *Worker {
-	return &Worker{store: store}
+	return NewWorkerWithClone(store, CloneRepo)
+}
+
+func NewWorkerWithClone(store Store, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
+	if clone == nil {
+		clone = CloneRepo
+	}
+	return &Worker{store: store, clone: clone}
 }
 
 // Process runs a single build by ID.
@@ -47,8 +60,22 @@ func (w *Worker) Process(ctx context.Context, buildID string) error {
 }
 
 func (w *Worker) execute(ctx context.Context, b Build) error {
-	_ = ctx
-	_ = b
-	// Clone, docker build, and registry push come next.
+	repo, err := w.store.GetRepo(ctx, b.AppID)
+	if err != nil {
+		return fmt.Errorf("get repo: %w", err)
+	}
+
+	dir, err := os.MkdirTemp("", "atlas-build-*")
+	if err != nil {
+		return fmt.Errorf("create workdir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	src := filepath.Join(dir, "src")
+	if err := w.clone(ctx, repo.URL, repo.Branch, src); err != nil {
+		return err
+	}
+
+	// Docker build and registry push come next.
 	return nil
 }
