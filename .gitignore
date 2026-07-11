@@ -1,0 +1,15 @@
+# Binaries
+/atlas-api
+/atlas-api.exe
+*.exe
+
+# Test coverage
+coverage.out
+
+# Local secrets and overrides
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
