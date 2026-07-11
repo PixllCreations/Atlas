@@ -50,6 +50,24 @@ func (s *Store) GetRepo(ctx context.Context, appID string) (app.Repo, error) {
 	return repo, nil
 }
 
+func (s *Store) FindAppByRepo(ctx context.Context, url, branch string) (string, error) {
+	const q = `
+		SELECT app_id::text
+		FROM app_repos
+		WHERE url = $1 AND branch = $2
+	`
+
+	var appID string
+	err := s.pool.QueryRow(ctx, q, url, branch).Scan(&appID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrRepoNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("find app by repo: %w", err)
+	}
+	return appID, nil
+}
+
 func (s *Store) UnlinkRepo(ctx context.Context, appID string) error {
 	const q = `DELETE FROM app_repos WHERE app_id = $1`
 
