@@ -6,7 +6,7 @@ Inspired by Render, Heroku, and Railway — not a clone.
 
 ## Status
 
-**Phase 4 in progress:** GitHub push → build → registry push → k3s Deployment, Service, and Ingress. Reconciliation, TLS, and observability are next.
+**Phase 4 in progress:** GitHub push → build → registry push → k3s Deployment, Service, Ingress, and optional TLS. Reconciliation and observability are next.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
@@ -15,7 +15,7 @@ Inspired by Render, Heroku, and Railway — not a clone.
 | 2 | Git source + webhooks | Done |
 | 3 | Builds (clone, docker build, push) | Done |
 | 4 | k3s runtime (Deploy, Service, Ingress) | In progress |
-| 5+ | Reconciliation, TLS, observability | Planned |
+| 5+ | Reconciliation, observability | Planned |
 
 ## Prerequisites
 
@@ -93,6 +93,8 @@ Open the app (with Ingress configured):
 
 ```bash
 curl http://portfolio.homelab.local
+# If ATLAS_INGRESS_TLS_SECRET is set:
+curl https://portfolio.homelab.local
 ```
 
 ### Build and deploy pipeline
@@ -120,14 +122,30 @@ External access (optional):
 - Set `ATLAS_INGRESS_DOMAIN` (e.g. `homelab.local`) — apps get `<app>.<domain>` (e.g. `portfolio.homelab.local`)
 - Set `ATLAS_INGRESS_CLASS=traefik` on k3s (or leave empty to use cluster default)
 - Point DNS or `/etc/hosts` at your k3s node IP
+- For HTTPS, create a `kubernetes.io/tls` Secret in `ATLAS_K8S_NAMESPACE` and set `ATLAS_INGRESS_TLS_SECRET` to its name
 
 Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atlas/<app-id>:<build-id>`, saved on the build record as `image`, and deployed as a Deployment named after the app (e.g. `portfolio`).
+
+Example TLS secret:
+
+```bash
+kubectl create secret tls homelab-tls \
+  --cert=wildcard.homelab.local.crt \
+  --key=wildcard.homelab.local.key \
+  -n default
+```
+
+Then set:
+
+```bash
+ATLAS_INGRESS_TLS_SECRET=homelab-tls
+```
 
 **Notes:**
 
 - Builds run on the host filesystem inside the API process, not in isolated k8s Jobs — builder isolation comes later.
 - If the cluster is unreachable, Atlas logs a warning and skips deploy; builds still run.
-- TLS/HTTPS not configured yet — Ingress is HTTP only for now.
+- Atlas references an existing TLS secret; it does not issue or renew certificates yet.
 
 ### GitHub webhooks
 
@@ -194,6 +212,7 @@ cp .env.example .env
 | `ATLAS_K8S_NAMESPACE` | `default` | Namespace for app Deployments |
 | `ATLAS_INGRESS_DOMAIN` | — | Base domain for apps (`portfolio.homelab.local`); empty skips Ingress |
 | `ATLAS_INGRESS_CLASS` | — | Ingress class (e.g. `traefik` on k3s) |
+| `ATLAS_INGRESS_TLS_SECRET` | — | Optional TLS Secret name for HTTPS Ingress |
 | `ATLAS_DB_PASSWORD` | `atlas` | Compose Postgres password |
 | `ATLAS_DB_PORT` | `5432` | Compose host port |
 | `ATLAS_TEST_DATABASE_URL` | same as above | Postgres DSN for integration tests |

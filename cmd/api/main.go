@@ -34,10 +34,11 @@ func main() {
 	webhookSecret := os.Getenv("ATLAS_WEBHOOK_SECRET")
 
 	workerCfg := build.WorkerConfig{
-		Registry:      os.Getenv("ATLAS_REGISTRY_URL"),
-		Namespace:     os.Getenv("ATLAS_K8S_NAMESPACE"),
-		IngressDomain: os.Getenv("ATLAS_INGRESS_DOMAIN"),
-		IngressClass:  os.Getenv("ATLAS_INGRESS_CLASS"),
+		Registry:         os.Getenv("ATLAS_REGISTRY_URL"),
+		Namespace:        os.Getenv("ATLAS_K8S_NAMESPACE"),
+		IngressDomain:    os.Getenv("ATLAS_INGRESS_DOMAIN"),
+		IngressClass:     os.Getenv("ATLAS_INGRESS_CLASS"),
+		IngressTLSSecret: os.Getenv("ATLAS_INGRESS_TLS_SECRET"),
 	}
 
 	var deployer build.Deployer
