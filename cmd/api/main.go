@@ -23,10 +23,11 @@ func main() {
 	}
 	defer st.Close()
 
-	addr := os.Getenv("ATLAS_ADDR")
-	if addr == "" {
-		addr = ":8080"
+	port := os.Getenv("ATLAS_PORT")
+	if port == "" {
+		port = "8080"
 	}
+	addr := ":" + port
 
 	if err := api.New(addr, st).Run(); err != nil {
 		log.Fatal(err)

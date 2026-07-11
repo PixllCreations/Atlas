@@ -8,7 +8,7 @@ CMD := ./cmd/api
 help:
 	@echo "Targets:"
 	@echo "  build    Build the API binary"
-	@echo "  run      Run the API server"
+	@echo "  run      Run the API server (loads .env if present)"
 	@echo "  test     Run Go tests"
 	@echo "  db-up    Start Postgres via Docker Compose"
 	@echo "  db-down  Stop Postgres"
@@ -18,8 +18,13 @@ help:
 build:
 	go build -o $(BINARY) $(CMD)
 
+ifeq ($(OS),Windows_NT)
 run:
-	go run $(CMD)
+	powershell -NoProfile -Command "if (Test-Path .env) { Get-Content .env | Where-Object { $$_ -and $$_ -notmatch '^\s*#' } | ForEach-Object { $$k,$$v = $$_ -split '=',2; [Environment]::SetEnvironmentVariable($$k.Trim(), $$v.Trim(), 'Process') } }; go run $(CMD)"
+else
+run:
+	@set -a; [ -f .env ] && . ./.env; set +a; go run $(CMD)
+endif
 
 test:
 	go test ./...
