@@ -1,47 +1,61 @@
 .DEFAULT_GOAL := help
 
-BINARY := atlas-api
-CMD := ./cmd/api
+WEB := ./web
 
-.PHONY: help build run test db-up db-down db-logs migrate
+.PHONY: help up down logs cluster cluster-down test web-dev require-env
 
 help:
-	@echo "Targets:"
-	@echo "  build    Build the API binary"
-	@echo "  run      Run the API server (loads .env if present)"
-	@echo "  test     Run Go tests"
-	@echo "  db-up    Start Postgres via Docker Compose"
-	@echo "  db-down  Stop Postgres"
-	@echo "  db-logs  Follow Postgres logs"
-	@echo "  migrate  Apply pending database migrations"
+	@echo "Atlas (public by default)"
+	@echo ""
+	@echo "  up            k3d cluster + Atlas + Cloudflare Tunnel"
+	@echo "  down          stop stack and delete k3d cluster"
+	@echo "  logs          follow api / postgres / tunnel logs"
+	@echo "  cluster       create or refresh k3d + kubeconfig"
+	@echo "  cluster-down  delete k3d cluster"
+	@echo "  test          run Go tests"
+	@echo "  web-dev       Vite dev server (API must be on :8080)"
 
-build:
-	go build -o $(BINARY) $(CMD)
+require-env:
+	@if [ ! -f .env ]; then \
+		echo "Copy .env.example to .env and set CLOUDFLARE_TUNNEL_TOKEN." >&2; \
+		exit 1; \
+	fi
+	@set -a; . ./.env; set +a; \
+	if [ -d "$$HOME/.kube/config" ]; then \
+		echo "$$HOME/.kube/config is a directory — run: rmdir $$HOME/.kube/config" >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$$HOME/.kube/config" ] || [ ! -f "$$HOME/.kube/atlas-docker.yaml" ]; then \
+		echo "Missing kubeconfig — run: make cluster" >&2; \
+		exit 1; \
+	fi; \
+	if [ -z "$$CLOUDFLARE_TUNNEL_TOKEN" ]; then \
+		echo "Set CLOUDFLARE_TUNNEL_TOKEN in .env (see README → Cloudflare)." >&2; \
+		exit 1; \
+	fi; \
+	if ! docker network inspect "$${ATLAS_K3D_NETWORK:-k3d-atlas}" >/dev/null 2>&1; then \
+		echo "k3d network missing — run: make cluster" >&2; \
+		exit 1; \
+	fi
 
-ifeq ($(OS),Windows_NT)
-run:
-	powershell -NoProfile -Command "if (Test-Path .env) { Get-Content .env | Where-Object { $$_ -and $$_ -notmatch '^\s*#' } | ForEach-Object { $$k,$$v = $$_ -split '=',2; [Environment]::SetEnvironmentVariable($$k.Trim(), $$v.Trim(), 'Process') } }; go run $(CMD)"
-else
-run:
-	@set -a; [ -f .env ] && . ./.env; set +a; go run $(CMD)
-endif
+cluster:
+	bash hack/cluster-up.sh
+
+cluster-down:
+	bash hack/cluster-down.sh
+
+up: cluster require-env
+	docker compose up -d --build
+
+down:
+	docker compose down
+	$(MAKE) cluster-down
+
+logs:
+	docker compose logs -f api postgres tunnel
 
 test:
 	go test ./...
 
-db-up:
-	docker compose up -d
-
-db-down:
-	docker compose down
-
-db-logs:
-	docker compose logs -f postgres
-
-ifeq ($(OS),Windows_NT)
-migrate:
-	powershell -ExecutionPolicy Bypass -File hack/migrate.ps1
-else
-migrate:
-	bash hack/migrate.sh
-endif
+web-dev:
+	cd $(WEB) && npm install && npm run dev

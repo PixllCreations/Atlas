@@ -3,6 +3,10 @@
 /atlas-api.exe
 *.exe
 
+# Frontend
+web/node_modules/
+web/dist/assets/
+
 # Test coverage
 coverage.out
 
@@ -10,6 +14,7 @@ coverage.out
 .env
 .env.*
 !.env.example
+*.pem
 
 # OS
 .DS_Store

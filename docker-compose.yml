@@ -17,6 +17,71 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - default
+
+  api:
+    build: .
+    image: atlas-api:local
+    ports:
+      - "${ATLAS_PORT:-8080}:8080"
+    environment:
+      ATLAS_PORT: "8080"
+      ATLAS_DATABASE_URL: postgres://atlas:${ATLAS_DB_PASSWORD:-atlas}@postgres:5432/atlas?sslmode=disable
+      ATLAS_REGISTRY_URL: ${ATLAS_REGISTRY_URL:-atlas-registry:5000}
+      ATLAS_WEBHOOK_SECRET: ${ATLAS_WEBHOOK_SECRET:-dev-webhook-secret}
+      ATLAS_K8S_NAMESPACE: ${ATLAS_K8S_NAMESPACE:-default}
+      ATLAS_INGRESS_DOMAIN: ${ATLAS_INGRESS_DOMAIN:-edwardscott.dev}
+      ATLAS_INGRESS_CLASS: ${ATLAS_INGRESS_CLASS:-traefik}
+      ATLAS_INGRESS_TLS_SECRET: ${ATLAS_INGRESS_TLS_SECRET:-}
+      ATLAS_REGISTRY_SECRET: ${ATLAS_REGISTRY_SECRET:-}
+      ATLAS_INSECURE_REGISTRY: ${ATLAS_INSECURE_REGISTRY:-true}
+      ATLAS_WEBHOOK_PUBLIC_URL: ${ATLAS_WEBHOOK_PUBLIC_URL:-https://hooks.edwardscott.dev/webhooks/github}
+      ATLAS_GITHUB_APP_ID: ${ATLAS_GITHUB_APP_ID:-}
+      ATLAS_GITHUB_APP_SLUG: ${ATLAS_GITHUB_APP_SLUG:-}
+      ATLAS_GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      ATLAS_GITHUB_APP_PRIVATE_KEY: ${ATLAS_GITHUB_APP_PRIVATE_KEY:-}
+      ATLAS_GITHUB_CLIENT_ID: ${ATLAS_GITHUB_CLIENT_ID:-}
+      ATLAS_GITHUB_CLIENT_SECRET: ${ATLAS_GITHUB_CLIENT_SECRET:-}
+      ATLAS_KUBECONFIG: /home/atlas/.kube/atlas-docker.yaml
+    volumes:
+      - ${KUBECONFIG_DIR:-${HOME}/.kube}:/home/atlas/.kube:ro
+      # Set ATLAS_GITHUB_APP_PRIVATE_KEY_HOST to your .pem on the host (defaults to empty device)
+      - ${ATLAS_GITHUB_APP_PRIVATE_KEY_HOST:-/dev/null}:/run/secrets/github-app.pem:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - default
+      - k3d
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - default
+
+networks:
+  k3d:
+    external: true
+    name: ${ATLAS_K3D_NETWORK:-k3d-atlas}
 
 volumes:
   postgres-data:

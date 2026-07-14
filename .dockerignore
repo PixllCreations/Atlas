@@ -1,0 +1,23 @@
+# Build context
+.git
+.gitignore
+.cursor
+**/.DS_Store
+*.md
+docs
+
+# Local env / binaries
+.env
+.env.*
+!.env.example
+atlas-api
+atlas-api.exe
+coverage.out
+
+# Frontend deps and local build (image builds web itself)
+web/node_modules
+web/dist
+
+# Editor / IDE
+.idea
+.vscode
