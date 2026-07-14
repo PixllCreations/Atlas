@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,8 @@ func testBuildsServer(t *testing.T, st *store.Store) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
-	RegisterApps(mux, st)
-	RegisterBuilds(mux, st)
+	RegisterApps(mux, st, nil, "")
+	RegisterBuilds(mux, st, nil)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -126,6 +127,68 @@ func TestBuildsListAndGet(t *testing.T) {
 	}
 	if got.Image != "" {
 		t.Fatalf("image = %q, want empty before push", got.Image)
+	}
+}
+
+func TestCreateBuild_ManualDeploy(t *testing.T) {
+	st, ts := openBuildsTestServer(t)
+	name := "builds-trigger-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	created := createApp(t, ts, name)
+
+	resp, err := http.Post(ts.URL+"/apps/"+created.ID+"/builds", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /apps/{id}/builds: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status without repo = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	assertErrorMessage(t, resp, "repo not linked")
+
+	mux := http.NewServeMux()
+	RegisterApps(mux, st, nil, "")
+	RegisterRepos(mux, st, nil)
+	RegisterBuilds(mux, st, nil)
+	ts2 := httptest.NewServer(mux)
+	t.Cleanup(ts2.Close)
+
+	created = createApp(t, ts2, "builds-trigger-linked-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	linkBody := `{"url":"https://github.com/example/repo","branch":"main"}`
+	req, err := http.NewRequest(http.MethodPut, ts2.URL+"/apps/"+created.ID+"/repo", bytes.NewBufferString(linkBody))
+	if err != nil {
+		t.Fatalf("PUT request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /repo: %v", err)
+	}
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("link status = %d, want %d", putResp.StatusCode, http.StatusOK)
+	}
+
+	trigger, err := http.Post(ts2.URL+"/apps/"+created.ID+"/builds", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /apps/{id}/builds: %v", err)
+	}
+	defer trigger.Body.Close()
+	if trigger.StatusCode != http.StatusAccepted {
+		t.Fatalf("trigger status = %d, want %d", trigger.StatusCode, http.StatusAccepted)
+	}
+
+	var accepted map[string]string
+	decodeJSON(t, trigger.Body, &accepted)
+	if accepted["app_id"] != created.ID || accepted["build_id"] == "" {
+		t.Fatalf("accepted = %+v", accepted)
+	}
+
+	builds := listBuilds(t, ts2, created.ID)
+	if len(builds) != 1 {
+		t.Fatalf("builds len = %d, want 1", len(builds))
+	}
+	if builds[0].ID != accepted["build_id"] {
+		t.Fatalf("build id = %q, want %q", builds[0].ID, accepted["build_id"])
 	}
 }
 

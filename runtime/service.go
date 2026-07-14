@@ -10,11 +10,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+const defaultServicePort int32 = 80
+
 // ServiceOptions configures a ClusterIP Service for an app.
 type ServiceOptions struct {
-	Namespace string
-	Name      string
-	Port      int32
+	Namespace     string
+	Name          string
+	Port          int32 // service port (Ingress targets this); defaults to 80
+	ContainerPort int32 // pod target port; defaults to Port
 }
 
 // EnsureService creates or updates a ClusterIP Service that selects pods by app label.
@@ -26,7 +29,10 @@ func (c *Client) EnsureService(ctx context.Context, opts ServiceOptions) error {
 		opts.Namespace = "default"
 	}
 	if opts.Port == 0 {
-		opts.Port = 80
+		opts.Port = defaultServicePort
+	}
+	if opts.ContainerPort == 0 {
+		opts.ContainerPort = opts.Port
 	}
 
 	svc := desiredService(opts)
@@ -50,7 +56,7 @@ func (c *Client) EnsureService(ctx context.Context, opts ServiceOptions) error {
 		{
 			Name:       "http",
 			Port:       opts.Port,
-			TargetPort: intstr.FromInt32(opts.Port),
+			TargetPort: intstr.FromInt32(opts.ContainerPort),
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
@@ -79,7 +85,7 @@ func desiredService(opts ServiceOptions) *corev1.Service {
 				{
 					Name:       "http",
 					Port:       opts.Port,
-					TargetPort: intstr.FromInt32(opts.Port),
+					TargetPort: intstr.FromInt32(opts.ContainerPort),
 					Protocol:   corev1.ProtocolTCP,
 				},
 			},

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pixll/atlas/app"
 	"github.com/pixll/atlas/build"
 	"github.com/pixll/atlas/store"
 	"github.com/pixll/atlas/webhook"
@@ -25,8 +26,8 @@ func testWebhooksServer(t *testing.T, st *store.Store, secret string, worker *bu
 	t.Helper()
 
 	mux := http.NewServeMux()
-	RegisterApps(mux, st)
-	RegisterRepos(mux, st)
+	RegisterApps(mux, st, nil, "")
+	RegisterRepos(mux, st, nil)
 	RegisterWebhooks(mux, st, secret, worker)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
@@ -43,6 +44,13 @@ func githubPushBody(repoURL, ref string) []byte {
 	return []byte(fmt.Sprintf(
 		`{"ref":%q,"repository":{"html_url":%q}}`,
 		ref, repoURL,
+	))
+}
+
+func githubPushBodyWithID(repoID int64, repoURL, ref string) []byte {
+	return []byte(fmt.Sprintf(
+		`{"ref":%q,"repository":{"id":%d,"html_url":%q,"full_name":"user/repo"}}`,
+		ref, repoID, repoURL,
 	))
 }
 
@@ -128,6 +136,44 @@ func TestWebhook_TagPushIgnored(t *testing.T) {
 	}
 }
 
+func TestWebhook_AcceptedPushByRepoID(t *testing.T) {
+	st, ts := openWebhooksTestServer(t)
+	name := "webhook-repo-id-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	created := createApp(t, ts, name)
+	repoURL := "https://github.com/user/" + name
+	const repoID int64 = 42424242
+
+	if err := st.UpsertInstallation(context.Background(), store.GitHubInstallation{
+		ID: 999000001, AccountLogin: "atlas-test-user", AccountType: "User",
+	}); err != nil {
+		t.Fatalf("UpsertInstallation: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = st.UnlinkReposByGitHubIDs(context.Background(), []int64{repoID})
+		_ = st.DeleteInstallation(context.Background(), 999000001)
+	})
+
+	_, err := st.LinkRepo(context.Background(), created.ID, app.Repo{
+		URL:            repoURL,
+		Provider:       app.ProviderGitHub,
+		Branch:         "main",
+		GitHubRepoID:   repoID,
+		GitHubFullName: "user/" + name,
+		InstallationID: 999000001,
+	})
+	if err != nil {
+		t.Fatalf("LinkRepo with github id: %v", err)
+	}
+
+	body := githubPushBodyWithID(repoID, "https://github.com/user/renamed", "refs/heads/main")
+	resp := postGitHubWebhook(t, ts, testWebhookSecret, "push", body, signGitHubPayload(testWebhookSecret, body))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusAccepted)
+	}
+}
+
 func TestWebhook_AcceptedPush(t *testing.T) {
 	st, ts := openWebhooksTestServer(t)
 	name := "webhook-accept-" + strconv.FormatInt(time.Now().UnixNano(), 10)
@@ -205,7 +251,7 @@ func openWebhooksTestServer(t *testing.T) (*store.Store, *httptest.Server) {
 	t.Cleanup(func() { st.Close() })
 	ensureMigrations(t, ctx, dsn)
 
-	return st, testWebhooksServer(t, st, testWebhookSecret, build.NewWorkerWithHooks(st, build.WorkerConfig{}, nil,
+	return st, testWebhooksServer(t, st, testWebhookSecret, build.NewWorkerWithHooks(st, build.WorkerConfig{}, nil, nil,
 		func(context.Context, string, string, string) error { return nil },
 		func(context.Context, string, string) error { return nil },
 		func(context.Context, string, string) error { return nil },

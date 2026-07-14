@@ -9,7 +9,10 @@ const (
 
 // Repo is the git source Atlas deploys for an App.
 type Repo struct {
-	URL      string
-	Provider Provider
-	Branch   string
+	URL            string
+	Provider       Provider
+	Branch         string
+	GitHubRepoID   int64
+	GitHubFullName string
+	InstallationID int64
 }

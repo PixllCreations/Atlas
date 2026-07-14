@@ -18,6 +18,11 @@ type Store interface {
 	GetApp(ctx context.Context, id string) (app.App, error)
 }
 
+// GitHubCloner resolves authenticated clone URLs for GitHub App installations.
+type GitHubCloner interface {
+	CloneURL(ctx context.Context, installationID int64, fullName string) (string, error)
+}
+
 // Deployer applies builds and deploys to the runtime cluster.
 type Deployer interface {
 	EnsureBuildJob(ctx context.Context, opts runtime.BuildJobOptions) error
@@ -25,6 +30,9 @@ type Deployer interface {
 	EnsureDeployment(ctx context.Context, opts runtime.DeployOptions) error
 	EnsureService(ctx context.Context, opts runtime.ServiceOptions) error
 	EnsureIngress(ctx context.Context, opts runtime.IngressOptions) error
+	DeleteDeployment(ctx context.Context, namespace, name string) error
+	DeleteService(ctx context.Context, namespace, name string) error
+	DeleteIngress(ctx context.Context, namespace, name string) error
 }
 
 // WorkerConfig holds runtime settings for the build worker.
@@ -43,23 +51,25 @@ type Worker struct {
 	cfg        WorkerConfig
 	store      Store
 	deployer   Deployer
+	github     GitHubCloner
 	clone      func(ctx context.Context, url, branch, dest string) error
 	buildImage func(ctx context.Context, contextDir, imageTag string) error
 	pushImage  func(ctx context.Context, registry, imageTag string) error
 }
 
-func NewWorker(store Store, cfg WorkerConfig, deployer Deployer) *Worker {
-	return NewWorkerWithHooks(store, cfg, deployer, CloneRepo, BuildImage, PushImage)
+func NewWorker(store Store, cfg WorkerConfig, deployer Deployer, gh GitHubCloner) *Worker {
+	return NewWorkerWithHooks(store, cfg, deployer, gh, CloneRepo, BuildImage, PushImage)
 }
 
 func NewWorkerWithClone(store Store, cfg WorkerConfig, clone func(ctx context.Context, url, branch, dest string) error) *Worker {
-	return NewWorkerWithHooks(store, cfg, nil, clone, BuildImage, PushImage)
+	return NewWorkerWithHooks(store, cfg, nil, nil, clone, BuildImage, PushImage)
 }
 
 func NewWorkerWithHooks(
 	store Store,
 	cfg WorkerConfig,
 	deployer Deployer,
+	gh GitHubCloner,
 	clone func(ctx context.Context, url, branch, dest string) error,
 	buildImage func(ctx context.Context, contextDir, imageTag string) error,
 	pushImage func(ctx context.Context, registry, imageTag string) error,
@@ -77,6 +87,7 @@ func NewWorkerWithHooks(
 		cfg:        cfg,
 		store:      store,
 		deployer:   deployer,
+		github:     gh,
 		clone:      clone,
 		buildImage: buildImage,
 		pushImage:  pushImage,
@@ -116,16 +127,21 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		return fmt.Errorf("get repo: %w", err)
 	}
 
+	cloneURL, err := w.cloneURL(ctx, repo)
+	if err != nil {
+		return err
+	}
+
 	tag := imageTag(b)
 	var remote string
 
 	if w.useJobBuild() {
 		remote = RemoteImageTag(w.cfg.Registry, tag)
-		if err := w.runJobBuild(ctx, b, repo, remote); err != nil {
+		if err := w.runJobBuild(ctx, b, repo, cloneURL, remote); err != nil {
 			return err
 		}
 	} else {
-		remote, err = w.runHostBuild(ctx, b, repo, tag)
+		remote, err = w.runHostBuild(ctx, b, repo, cloneURL, tag)
 		if err != nil {
 			return err
 		}
@@ -142,11 +158,22 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 	return w.deployApp(ctx, b, remote)
 }
 
+func (w *Worker) cloneURL(ctx context.Context, repo app.Repo) (string, error) {
+	if repo.InstallationID != 0 && repo.GitHubFullName != "" && w.github != nil {
+		url, err := w.github.CloneURL(ctx, repo.InstallationID, repo.GitHubFullName)
+		if err != nil {
+			return "", fmt.Errorf("github clone url: %w", err)
+		}
+		return url, nil
+	}
+	return repo.URL, nil
+}
+
 func (w *Worker) useJobBuild() bool {
 	return w.deployer != nil && w.cfg.Registry != ""
 }
 
-func (w *Worker) runHostBuild(ctx context.Context, b Build, repo app.Repo, tag string) (string, error) {
+func (w *Worker) runHostBuild(ctx context.Context, b Build, repo app.Repo, cloneURL, tag string) (string, error) {
 	dir, err := os.MkdirTemp("", "atlas-build-*")
 	if err != nil {
 		return "", fmt.Errorf("create workdir: %w", err)
@@ -154,7 +181,7 @@ func (w *Worker) runHostBuild(ctx context.Context, b Build, repo app.Repo, tag s
 	defer os.RemoveAll(dir)
 
 	src := filepath.Join(dir, "src")
-	if err := w.clone(ctx, repo.URL, repo.Branch, src); err != nil {
+	if err := w.clone(ctx, cloneURL, repo.Branch, src); err != nil {
 		return "", err
 	}
 
@@ -173,11 +200,11 @@ func (w *Worker) runHostBuild(ctx context.Context, b Build, repo app.Repo, tag s
 	return RemoteImageTag(w.cfg.Registry, tag), nil
 }
 
-func (w *Worker) runJobBuild(ctx context.Context, b Build, repo app.Repo, remote string) error {
+func (w *Worker) runJobBuild(ctx context.Context, b Build, repo app.Repo, cloneURL, remote string) error {
 	if err := w.deployer.EnsureBuildJob(ctx, runtime.BuildJobOptions{
 		Namespace:          w.cfg.Namespace,
 		BuildID:            b.ID,
-		RepoURL:            repo.URL,
+		RepoURL:            cloneURL,
 		Branch:             repo.Branch,
 		Image:              remote,
 		RegistrySecretName: w.cfg.RegistrySecretName,
@@ -202,17 +229,25 @@ func (w *Worker) deployApp(ctx context.Context, b Build, remote string) error {
 		return fmt.Errorf("get app: %w", err)
 	}
 
+	containerPort := int32(a.Port)
+	if containerPort <= 0 {
+		containerPort = int32(app.DefaultPort)
+	}
+
 	if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
 		Namespace: w.cfg.Namespace,
 		Name:      a.Name,
 		Image:     remote,
+		Port:      containerPort,
 	}); err != nil {
 		return fmt.Errorf("deploy: %w", err)
 	}
 
 	if err := w.deployer.EnsureService(ctx, runtime.ServiceOptions{
-		Namespace: w.cfg.Namespace,
-		Name:      a.Name,
+		Namespace:     w.cfg.Namespace,
+		Name:          a.Name,
+		Port:          80,
+		ContainerPort: containerPort,
 	}); err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
@@ -222,6 +257,7 @@ func (w *Worker) deployApp(ctx context.Context, b Build, remote string) error {
 			Namespace:        w.cfg.Namespace,
 			Name:             a.Name,
 			Host:             ingressHost(a.Name, w.cfg.IngressDomain),
+			Port:             80,
 			IngressClassName: w.cfg.IngressClass,
 			TLSSecretName:    w.cfg.IngressTLSSecret,
 		}); err != nil {

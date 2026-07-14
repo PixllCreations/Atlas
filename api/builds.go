@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/pixll/atlas/build"
@@ -19,12 +20,14 @@ type buildResponse struct {
 }
 
 type buildsHandler struct {
-	store *store.Store
+	store  *store.Store
+	worker *build.Worker
 }
 
-func RegisterBuilds(mux *http.ServeMux, st *store.Store) {
-	h := &buildsHandler{store: st}
+func RegisterBuilds(mux *http.ServeMux, st *store.Store, worker *build.Worker) {
+	h := &buildsHandler{store: st, worker: worker}
 	mux.HandleFunc("GET /apps/{id}/builds", h.list)
+	mux.HandleFunc("POST /apps/{id}/builds", h.create)
 	mux.HandleFunc("GET /apps/{id}/builds/{build_id}", h.get)
 }
 
@@ -50,6 +53,46 @@ func (h *buildsHandler) list(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, toBuildResponse(b))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *buildsHandler) create(w http.ResponseWriter, r *http.Request) {
+	appID := r.PathValue("id")
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if err := h.ensureAppExists(r.Context(), appID); err != nil {
+		writeAppLookupError(w, err)
+		return
+	}
+
+	if _, err := h.store.GetRepo(r.Context(), appID); errors.Is(err, store.ErrRepoNotFound) {
+		writeError(w, http.StatusBadRequest, "repo not linked")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get repo")
+		return
+	}
+
+	b, err := h.store.CreateBuild(r.Context(), appID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create build")
+		return
+	}
+
+	if h.worker != nil {
+		go func(buildID string) {
+			if err := h.worker.Process(context.Background(), buildID); err != nil {
+				log.Printf("process build %s: %v", buildID, err)
+			}
+		}(b.ID)
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":   "accepted",
+		"app_id":   appID,
+		"build_id": b.ID,
+	})
 }
 
 func (h *buildsHandler) get(w http.ResponseWriter, r *http.Request) {

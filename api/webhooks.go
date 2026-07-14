@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -26,10 +27,7 @@ func RegisterWebhooks(mux *http.ServeMux, st *store.Store, secret string, worker
 }
 
 func (h *webhooksHandler) github(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-GitHub-Event") != "push" {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
+	eventType := r.Header.Get("X-GitHub-Event")
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
 	if err != nil {
@@ -47,6 +45,19 @@ func (h *webhooksHandler) github(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	switch eventType {
+	case "push":
+		h.handlePush(w, r, body)
+	case "installation":
+		h.handleInstallation(w, r, body)
+	case "installation_repositories":
+		h.handleInstallationRepositories(w, body)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (h *webhooksHandler) handlePush(w http.ResponseWriter, r *http.Request, body []byte) {
 	event, err := webhook.ParseGitHubPush(body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid payload")
@@ -59,7 +70,7 @@ func (h *webhooksHandler) github(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	appID, err := h.store.FindAppByRepo(r.Context(), event.Repository.HTMLURL, branch)
+	appID, err := h.findAppForPush(r.Context(), event, branch)
 	if errors.Is(err, store.ErrRepoNotFound) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -88,4 +99,74 @@ func (h *webhooksHandler) github(w http.ResponseWriter, r *http.Request) {
 		"app_id":   appID,
 		"build_id": b.ID,
 	})
+}
+
+func (h *webhooksHandler) findAppForPush(ctx context.Context, event webhook.GitHubPushEvent, branch string) (string, error) {
+	if event.Repository.ID != 0 {
+		appID, err := h.store.FindAppByGitHubRepoID(ctx, event.Repository.ID, branch)
+		if err == nil {
+			return appID, nil
+		}
+		if !errors.Is(err, store.ErrRepoNotFound) {
+			return "", err
+		}
+	}
+	return h.store.FindAppByRepo(ctx, event.Repository.HTMLURL, branch)
+}
+
+func (h *webhooksHandler) handleInstallation(w http.ResponseWriter, r *http.Request, body []byte) {
+	var event struct {
+		Action       string `json:"action"`
+		Installation struct {
+			ID      int64 `json:"id"`
+			Account struct {
+				Login string `json:"login"`
+				Type  string `json:"type"`
+			} `json:"account"`
+		} `json:"installation"`
+	}
+	if err := json.Unmarshal(body, &event); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	switch event.Action {
+	case "created", "added":
+		if event.Installation.ID == 0 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err := h.store.UpsertInstallation(r.Context(), store.GitHubInstallation{
+			ID:           event.Installation.ID,
+			AccountLogin: event.Installation.Account.Login,
+			AccountType:  event.Installation.Account.Type,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save installation")
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *webhooksHandler) handleInstallationRepositories(w http.ResponseWriter, body []byte) {
+	event, err := webhook.ParseInstallationRepositories(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+	if event.Action != "removed" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var ids []int64
+	for _, repo := range event.Repositories {
+		if repo.ID != 0 {
+			ids = append(ids, repo.ID)
+		}
+	}
+	if err := h.store.UnlinkReposByGitHubIDs(context.Background(), ids); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unlink repos")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

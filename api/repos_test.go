@@ -20,8 +20,8 @@ func testReposServer(t *testing.T, st *store.Store) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
-	RegisterApps(mux, st)
-	RegisterRepos(mux, st)
+	RegisterApps(mux, st, nil, "")
+	RegisterRepos(mux, st, nil)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -38,7 +38,7 @@ func TestLinkRepo_EmptyURL(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
-	assertErrorMessage(t, resp, "url is required")
+	assertErrorMessage(t, resp, "url or github_full_name is required")
 }
 
 func TestLinkRepo_UnsupportedProvider(t *testing.T) {

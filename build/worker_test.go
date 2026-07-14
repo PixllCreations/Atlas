@@ -82,7 +82,7 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	store.repos = map[string]app.Repo{
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
-	worker := NewWorker(store, WorkerConfig{Registry: "localhost:5000"}, nil)
+	worker := NewWorker(store, WorkerConfig{Registry: "localhost:5000"}, nil, nil)
 	worker.clone = func(context.Context, string, string, string) error { return nil }
 	worker.buildImage = func(context.Context, string, string) error { return nil }
 	worker.pushImage = func(context.Context, string, string) error { return nil }
@@ -117,9 +117,14 @@ func (f *fakeDeployer) WaitForBuildJob(_ context.Context, namespace, buildID str
 	return nil
 }
 
-func (f *fakeDeployer) EnsureDeployment(context.Context, runtime.DeployOptions) error { return nil }
-func (f *fakeDeployer) EnsureService(context.Context, runtime.ServiceOptions) error    { return nil }
-func (f *fakeDeployer) EnsureIngress(context.Context, runtime.IngressOptions) error   { return nil }
+func (f *fakeDeployer) EnsureDeployment(context.Context, runtime.DeployOptions) error {
+	return nil
+}
+func (f *fakeDeployer) EnsureService(context.Context, runtime.ServiceOptions) error  { return nil }
+func (f *fakeDeployer) EnsureIngress(context.Context, runtime.IngressOptions) error { return nil }
+func (f *fakeDeployer) DeleteDeployment(context.Context, string, string) error       { return nil }
+func (f *fakeDeployer) DeleteService(context.Context, string, string) error          { return nil }
+func (f *fakeDeployer) DeleteIngress(context.Context, string, string) error          { return nil }
 
 func TestWorker_ProcessPendingBuildJobPath(t *testing.T) {
 	now := time.Now()
@@ -134,7 +139,7 @@ func TestWorker_ProcessPendingBuildJobPath(t *testing.T) {
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
 	store.apps = map[string]app.App{
-		"app-1": {ID: "app-1", Name: "portfolio"},
+		"app-1": {ID: "app-1", Name: "portfolio", Port: 80},
 	}
 
 	deployer := &fakeDeployer{}
@@ -143,7 +148,7 @@ func TestWorker_ProcessPendingBuildJobPath(t *testing.T) {
 		Namespace:          "default",
 		RegistrySecretName: "registry-creds",
 		InsecureRegistry:   true,
-	}, deployer)
+	}, deployer, nil)
 	worker.clone = func(context.Context, string, string, string) error {
 		t.Fatal("host clone should not run when job build is available")
 		return nil
@@ -194,7 +199,7 @@ func TestWorker_ProcessNonPendingBuild(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	worker := NewWorker(store, WorkerConfig{}, nil)
+	worker := NewWorker(store, WorkerConfig{}, nil, nil)
 
 	if err := worker.Process(context.Background(), "build-1"); err != nil {
 		t.Fatalf("Process() = %v, want nil", err)
@@ -207,7 +212,7 @@ func TestWorker_ProcessNonPendingBuild(t *testing.T) {
 }
 
 func TestWorker_ProcessBuildNotFound(t *testing.T) {
-	worker := NewWorker(newFakeBuildStore(), WorkerConfig{}, nil)
+	worker := NewWorker(newFakeBuildStore(), WorkerConfig{}, nil, nil)
 
 	err := worker.Process(context.Background(), "missing")
 	if err == nil {

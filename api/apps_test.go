@@ -21,7 +21,7 @@ func testAppsServer(t *testing.T, st *store.Store) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
-	RegisterApps(mux, st)
+	RegisterApps(mux, st, nil, "")
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -109,6 +109,19 @@ func createApp(t *testing.T, ts *httptest.Server, name string) appResponse {
 
 	var created appResponse
 	decodeJSON(t, resp.Body, &created)
+
+	t.Cleanup(func() {
+		req, err := http.NewRequest(http.MethodDelete, ts.URL+"/apps/"+created.ID, nil)
+		if err != nil {
+			return
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		_ = r.Body.Close()
+	})
+
 	return created
 }
 
@@ -212,21 +225,23 @@ func containsApp(apps []appResponse, id string) bool {
 func ensureAppsTable(t *testing.T, ctx context.Context, dsn string) {
 	t.Helper()
 
-	sql, err := os.ReadFile("../store/migrations/001_apps.sql")
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
-	}
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect for migration: %v", err)
-	}
-	defer conn.Close(ctx)
-
-	if _, err := conn.Exec(ctx, string(sql)); err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			return
+	for _, name := range []string{"001_apps.sql", "006_app_port.sql"} {
+		sql, err := os.ReadFile("../store/migrations/" + name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
 		}
-		t.Fatalf("apply migration: %v", err)
+
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatalf("connect for migration: %v", err)
+		}
+		if _, err := conn.Exec(ctx, string(sql)); err != nil {
+			conn.Close(ctx)
+			if strings.Contains(err.Error(), "already exists") {
+				continue
+			}
+			t.Fatalf("apply migration %s: %v", name, err)
+		}
+		conn.Close(ctx)
 	}
 }
