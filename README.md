@@ -1,263 +1,234 @@
 # Atlas
 
-A personal Platform-as-a-Service for homelab deployments. Atlas automates the workflow of shipping applications to a Kubernetes cluster — starting with app registration and growing toward builds, deploys, and observability.
+**A self-hosted Platform-as-a-Service for Kubernetes** — register apps in a Railway-like console, connect GitHub repos, and ship containerized workloads to a k3s cluster with a deploy button or a single `git push`.
 
-Inspired by Render, Heroku, and Railway — not a clone.
+Inspired by Render, Heroku, and Railway. Built from scratch in Go to demonstrate end-to-end platform engineering: API design, async build pipelines, container orchestration, and infrastructure automation.
 
-## Status
+Access the console on **Tailscale** (`http://<host>:8080`). Public apps and webhooks go through **Cloudflare Tunnel** on `*.edwardscott.dev` / `hooks.edwardscott.dev`.
 
-**Phase 4 in progress:** GitHub push → build → registry push → k3s Deployment, Service, Ingress, and optional TLS. Reconciliation and observability are next.
+---
+
+## Highlights
+
+- **Console UI** — React SPA (embedded in the API) for projects, GitHub linking, deploy, build history, and teardown
+- **GitHub App** — Connect GitHub once; push events and private clones without per-repo webhook setup
+- **Git-to-deploy pipeline** — Manual deploy or push webhooks → clone → Kaniko build → registry push → Kubernetes rollout
+- **Isolated builds** — Kaniko Jobs for sandboxed image builds without a host Docker daemon
+- **Declarative runtime** — Idempotent Deployment, Service, and Ingress via client-go; delete tears them down
+- **Configurable container port** — Service stays on `:80` and forwards to the app’s listen port
+- **REST API** — Full app lifecycle with Postgres-backed persistence and SQL migrations
+
+## Tech Stack
+
+| Layer | Technologies |
+|-------|--------------|
+| Language | Go 1.26 |
+| UI | React, TypeScript, Vite (embedded into the API binary) |
+| API | `net/http` (Go 1.22+ routing), REST |
+| Database | PostgreSQL, pgx/v5, hand-written SQL migrations |
+| GitHub | GitHub App (JWT + installation tokens) |
+| Container builds | Kaniko (K8s Jobs); Docker host fallback |
+| Orchestration | Kubernetes via **k3d** (local) or k3s, client-go v0.36 |
+| Ingress | Traefik (bundled with k3d/k3s) |
+| Access | Tailscale (console); Cloudflare Tunnel (public apps + webhooks) |
+
+## Architecture
+
+```text
+Mac / Desktop (Tailscale)
+    │
+    ▼
+┌──────────────────────────────────┐
+│  Atlas :8080  (UI + API)         │
+│  React console  ·  REST handlers │
+└──────────────┬───────────────────┘
+               │
+     ┌─────────┴─────────┐
+     ▼                   ▼
+ Postgres          Build worker
+                         │
+           ┌─────────────┴─────────────┐
+           ▼                           ▼
+    Kaniko Job / host build      Docker registry
+           │                           │
+           └───────────┬───────────────┘
+                       ▼
+              k3s Deployment → Service → Ingress
+                       │
+                       ▼
+              https://app.edwardscott.dev
+```
+
+GitHub App push events → `hooks.edwardscott.dev` → Atlas API → create build.
+
+## Console
+
+```bash
+make up                  # k3d + Postgres + API + Cloudflare Tunnel
+```
+
+Open `http://localhost:8080` (or `http://<tailscale-hostname>:8080`).
+
+1. **New project** — name becomes the K8s resource / ingress host (`<name>.edwardscott.dev`)
+2. **Connect GitHub** — install the Atlas GitHub App, then pick a repo + branch
+3. **Deploy** — `POST /apps/{id}/builds` (same pipeline as webhooks)
+4. **Push to re-deploy** — App webhooks fire automatically (no per-repo webhook config)
+5. **Settings** — container port, unlink repo, manage GitHub access, or delete the project
+
+Status (**Status** in the sidebar) shows registry, Kubernetes, webhook, and GitHub App hints.
+
+UI routes use `/projects/...` and `/system` so they do not collide with the JSON API (`/apps`, `/status`).
+
+## Project Status
 
 | Phase | Feature | Status |
 |-------|---------|--------|
 | 0 | Health check, dev tooling | Done |
 | 1 | Apps CRUD + Postgres | Done |
 | 2 | Git source + webhooks | Done |
-| 3 | Builds (clone, docker build, push) | Done |
-| 4 | k3s runtime (Deploy, Service, Ingress, TLS, Kaniko Job builds) | In progress |
-| 5+ | Reconciliation, observability | Planned |
+| 3 | Builds (clone, Kaniko/Docker, push) | Done |
+| 4 | k3s runtime + console UI + GitHub App | Done |
+| 5+ | Add-ons (Redis…), env vars, log streaming, deploy phases | Planned — see [TODO.md](TODO.md) |
 
-## Prerequisites
+## Quick Start
 
-- Go 1.26+
-- Docker + Docker Compose (Docker daemon required only for host-fallback builds; k8s Job builds use Kaniko)
-- `git` on PATH (host-fallback clone step)
-- `make` (optional but recommended)
-- k3s or Kubernetes cluster + kubeconfig access (for deploys and isolated Job builds)
-- Local Docker registry (required for k3s deploys — e.g. `localhost:5000`)
-- DNS or `/etc/hosts` entries for `*.your-domain` (if using Ingress)
+**Prerequisites:** Docker, [k3d](https://k3d.io/), [kubectl](https://kubernetes.io/docs/tasks/tools/), domain on Cloudflare DNS.
 
-## Quick start
+### 1. Cloudflare Tunnel + DNS (one time)
 
-```bash
-cp .env.example .env
+Full walkthrough: **[docs/cloudflare.md](docs/cloudflare.md)**
 
-# Start Postgres
-make db-up
+1. Zero Trust → **Tunnels** → Create → Docker → copy token to `.env` as `CLOUDFLARE_TUNNEL_TOKEN`
+2. Add public hostnames (**order matters** — put `hooks` above the wildcard):
 
-# Apply schema
-make migrate
+| Hostname | Service URL |
+|----------|-------------|
+| `hooks.edwardscott.dev` | `http://api:8080` |
+| `*.edwardscott.dev` | `http://host.docker.internal:80` |
 
-# Run the API
-make run
-```
+3. Keep `edwardscott.dev` / `www` on GitHub Pages (unchanged)
+4. SSL/TLS mode: **Full** (wait for Universal SSL / Edge Certificates if the zone is new)
 
-Verify:
+### 2. GitHub App (recommended)
+
+See **[docs/github-app.md](docs/github-app.md)**. You need App ID, slug, private key, and webhook secret matching `ATLAS_WEBHOOK_SECRET`. Set the app **Setup URL** to the same callback as install redirects.
+
+### 3. Run Atlas
 
 ```bash
-curl http://localhost:8080/healthz
-curl -X POST http://localhost:8080/apps \
-  -H "Content-Type: application/json" \
-  -d '{"name":"portfolio"}'
-curl http://localhost:8080/apps
+brew install k3d kubectl   # once
+cp .env.example .env       # CLOUDFLARE_TUNNEL_TOKEN, ATLAS_WEBHOOK_SECRET, GitHub App vars
+
+make up                    # k3d + Postgres + API + tunnel
+make logs                  # optional
 ```
 
-Link a GitHub repo to an app:
+- Console: `http://localhost:8080` (or Tailscale)
+- Deploy app `portfolio` → `https://portfolio.edwardscott.dev`
+- GitHub App webhook → `https://hooks.edwardscott.dev/webhooks/github`
 
 ```bash
-curl -X PUT http://localhost:8080/apps/{id}/repo \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://github.com/you/portfolio","branch":"main"}'
+make down                  # stop everything
 ```
 
-Poll build history after a push:
+### Deploy requirements
 
-```bash
-curl http://localhost:8080/apps/{id}/builds
-curl http://localhost:8080/apps/{id}/builds/{build_id}
-```
+- `Dockerfile` at repo root
+- Container listens on port **80** by default, or set **Container port** in project Settings (e.g. `8080`)
+- Public or private GitHub repos (private requires the GitHub App)
+- App name becomes the hostname: `<name>.edwardscott.dev`
 
-Example build response (after a successful push):
+### Legacy: manual repo webhooks
 
-```json
-{
-  "id": "…",
-  "app_id": "…",
-  "status": "succeeded",
-  "image": "localhost:5000/atlas/<app-id>:<build-id>",
-  "created_at": "2026-07-11T12:00:00Z",
-  "updated_at": "2026-07-11T12:01:30Z"
-}
-```
+If the GitHub App is not configured, link a repo URL and add a push webhook yourself:
 
-`image` is empty until the worker pushes to the registry; it holds the full registry-qualified tag used for deploy.
-
-Check resources on k3s:
-
-```bash
-kubectl get deployments,services,ingress -n default
-kubectl get pods -n default -l app=portfolio
-```
-
-Open the app (with Ingress configured):
-
-```bash
-curl http://portfolio.homelab.local
-# If ATLAS_INGRESS_TLS_SECRET is set:
-curl https://portfolio.homelab.local
-```
-
-### Build and deploy pipeline
-
-On a matched GitHub push:
-
-```text
-webhook → create build (pending) → worker (async)
-  → build image (k8s Job with Kaniko, or host docker build as fallback)
-  → save image on build record → EnsureDeployment → EnsureService → EnsureIngress (if ATLAS_INGRESS_DOMAIN set)
-  → build status: succeeded | failed
-```
-
-Atlas chooses a build strategy per build:
-
-- **Isolated k8s Job (preferred):** when a cluster is reachable and `ATLAS_REGISTRY_URL` is set, each build runs as an `atlas-build-<build-id>` Job — an init container does a shallow `git clone`, then [Kaniko](https://github.com/GoogleContainerTools/kaniko) builds the Dockerfile and pushes to the registry. No Docker daemon on the API host required.
-- **Host build (fallback):** when no cluster is available, the worker clones and runs `docker build` / `docker push` on the API host (requires `git` and `docker` on the host).
-
-Requirements for a full deploy:
-
-- Repo must contain a `Dockerfile` at the root
-- Public git repo (private repo credentials are not supported yet)
-- Container listens on port `80` (matches Service/Ingress defaults for now)
-- `ATLAS_REGISTRY_URL` set so k3s can pull the image
-- k3s reachable via `ATLAS_KUBECONFIG`, in-cluster config, or default `~/.kube/config`
-- k3s configured to pull from your registry (e.g. insecure registry for `localhost:5000`)
-- For Job builds against an insecure registry, set `ATLAS_INSECURE_REGISTRY=true`
-- For registries that require auth, create a `dockerconfigjson` Secret and set `ATLAS_REGISTRY_SECRET` to its name
-
-External access (optional):
-
-- Set `ATLAS_INGRESS_DOMAIN` (e.g. `homelab.local`) — apps get `<app>.<domain>` (e.g. `portfolio.homelab.local`)
-- Set `ATLAS_INGRESS_CLASS=traefik` on k3s (or leave empty to use cluster default)
-- Point DNS or `/etc/hosts` at your k3s node IP
-- For HTTPS, create a `kubernetes.io/tls` Secret in `ATLAS_K8S_NAMESPACE` and set `ATLAS_INGRESS_TLS_SECRET` to its name
-
-Images are tagged `atlas/<app-id>:<build-id>` locally, pushed as `<registry>/atlas/<app-id>:<build-id>`, saved on the build record as `image`, and deployed as a Deployment named after the app (e.g. `portfolio`).
-
-Example TLS secret:
-
-```bash
-kubectl create secret tls homelab-tls \
-  --cert=wildcard.homelab.local.crt \
-  --key=wildcard.homelab.local.key \
-  -n default
-```
-
-Then set:
-
-```bash
-ATLAS_INGRESS_TLS_SECRET=homelab-tls
-```
-
-Example registry auth secret (only if your registry requires login):
-
-```bash
-kubectl create secret docker-registry registry-creds \
-  --docker-server=registry.homelab.local \
-  --docker-username=<user> \
-  --docker-password=<pass> \
-  -n default
-```
-
-Then set:
-
-```bash
-ATLAS_REGISTRY_SECRET=registry-creds
-```
-
-**Notes:**
-
-- When a cluster is reachable, builds run as isolated k8s Jobs (Kaniko); otherwise they fall back to host `docker build`.
-- The build worker waits synchronously for the Job to finish; build logs are not streamed yet.
-- If the cluster is unreachable, Atlas logs a warning and skips deploy; host builds still run.
-- Atlas references an existing TLS secret; it does not issue or renew certificates yet.
-
-### GitHub webhooks
-
-Atlas uses one webhook secret for the whole instance. Reuse the same value from `ATLAS_WEBHOOK_SECRET` on every GitHub webhook you create.
-
-1. Generate a production secret: `openssl rand -hex 32`
-2. Set `ATLAS_WEBHOOK_SECRET` in `.env`
-3. In GitHub → repo → Settings → Webhooks → Add webhook:
-   - **Payload URL:** `https://<your-atlas-host>/webhooks/github`
-   - **Content type:** `application/json`
-   - **Secret:** same value as `ATLAS_WEBHOOK_SECRET`
-   - **Events:** Just the push event
-
-Pushes to a linked repo and branch return `202 Accepted` with `app_id` and `build_id`. Unlinked repos, wrong branches, and non-push events are ignored with `204 No Content`.
+1. `openssl rand -hex 32` → `ATLAS_WEBHOOK_SECRET`
+2. Repo → Settings → Webhooks → `https://hooks.edwardscott.dev/webhooks/github`, secret above, event **Push**
 
 ## API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/healthz` | Liveness check |
+| `GET` | `/status` | Runtime hints (registry, k8s, ingress, GitHub App) |
 | `GET` | `/apps` | List all apps |
 | `POST` | `/apps` | Create app (`{"name":"..."}`) |
 | `GET` | `/apps/{id}` | Get app by ID |
-| `DELETE` | `/apps/{id}` | Delete app |
-| `PUT` | `/apps/{id}/repo` | Link git repo (`{"url":"...","branch":"main"}`) |
+| `PATCH` | `/apps/{id}` | Update app (`{"port":8080}`) |
+| `DELETE` | `/apps/{id}` | Teardown K8s resources and delete app |
+| `PUT` | `/apps/{id}/repo` | Link repo (URL or `github_full_name` + `installation_id`) |
 | `GET` | `/apps/{id}/repo` | Get linked repo |
 | `DELETE` | `/apps/{id}/repo` | Unlink repo |
-| `GET` | `/apps/{id}/builds` | List builds for an app (newest first; includes `image`) |
-| `GET` | `/apps/{id}/builds/{build_id}` | Get build by ID (includes `image`, `status`, timestamps) |
-| `POST` | `/webhooks/github` | GitHub push webhook (signed; builds and deploys) |
+| `GET` | `/apps/{id}/builds` | List builds (newest first) |
+| `POST` | `/apps/{id}/builds` | Trigger a manual build/deploy |
+| `GET` | `/apps/{id}/builds/{build_id}` | Get build status and image |
+| `GET` | `/auth/github/install` | Start GitHub App install |
+| `GET` | `/auth/github/callback` | GitHub App setup/install callback |
+| `GET` | `/github/installations` | List stored installations |
+| `POST` | `/github/installations/sync` | Sync installations from GitHub API |
+| `GET` | `/github/installations/{id}/repos` | List repos for an installation |
+| `POST` | `/webhooks/github` | GitHub App / push webhook |
 
-## Project layout
+## Project Layout
 
 ```
 Atlas/
-├── api/              # HTTP server and handlers
-├── app/              # App and Repo resource types
-├── build/            # Build type, worker, clone/build/push steps
-├── runtime/          # k3s client-go, Deployment, Service, Ingress
-├── webhook/          # GitHub webhook verification and parsing
-├── store/            # Postgres persistence and migrations
+├── api/              # HTTP server, handlers, SPA embedding
+├── app/              # Domain types (App, Repo)
+├── build/            # Build worker, clone/build/push pipeline
+├── github/           # GitHub App JWT, tokens, install state
+├── runtime/          # client-go — Deployments, Services, Ingress, Kaniko Jobs
+├── webhook/          # GitHub HMAC verification and payload parsing
+├── store/            # Postgres persistence and SQL migrations
+├── web/              # React console (Vite); dist embedded at build time
 ├── cmd/api/          # API binary entrypoint
-├── hack/             # Migration scripts
+├── docs/             # Cloudflare + GitHub App setup
+├── hack/             # k3d cluster + Docker entrypoint
+├── Dockerfile
 ├── docker-compose.yml
 ├── Makefile
+├── TODO.md           # Next features (add-ons, env, logs, …)
 └── go.mod
 ```
 
 ## Configuration
 
-Copy the example env file for local overrides:
-
-```bash
-cp .env.example .env
-```
+Copy `.env.example` to `.env` for local overrides. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ATLAS_PORT` | `8080` | HTTP listen port |
+| `ATLAS_PORT` | `8080` | HTTP listen port (UI + API) |
 | `ATLAS_DATABASE_URL` | `postgres://atlas:atlas@localhost:5432/atlas?sslmode=disable` | Postgres DSN |
-| `ATLAS_WEBHOOK_SECRET` | — | HMAC secret for GitHub webhooks (required for webhook verification) |
-| `ATLAS_REGISTRY_URL` | — | Docker registry host (e.g. `localhost:5000`); empty skips push and deploy |
-| `ATLAS_REGISTRY_SECRET` | — | `dockerconfigjson` Secret name for Kaniko push auth; empty if registry needs no auth |
-| `ATLAS_INSECURE_REGISTRY` | `false` | Set `true` for insecure registries (e.g. `localhost:5000`) in Job builds |
+| `ATLAS_WEBHOOK_SECRET` | — | HMAC secret for GitHub webhooks (and install state) |
+| `ATLAS_WEBHOOK_PUBLIC_URL` | — | Public webhook URL shown in the UI |
+| `ATLAS_GITHUB_APP_ID` | — | GitHub App ID |
+| `ATLAS_GITHUB_APP_SLUG` | — | App slug (`https://github.com/apps/<slug>`) |
+| `ATLAS_GITHUB_APP_PRIVATE_KEY_HOST` | — | Host path to `.pem` (Compose bind-mount) |
+| `ATLAS_GITHUB_APP_PRIVATE_KEY` | — | PEM contents (alternative to file path) |
+| `ATLAS_REGISTRY_URL` | `atlas-registry:5000` | Registry host (k3d in-cluster name; host port defaults to `localhost:5001`) |
+| `ATLAS_REGISTRY_SECRET` | — | `dockerconfigjson` Secret for Kaniko push auth |
+| `ATLAS_INSECURE_REGISTRY` | `true` (`.env.example`) | Allow insecure registries in Job builds |
 | `ATLAS_KUBECONFIG` | — | Path to kubeconfig; empty uses in-cluster or `~/.kube/config` |
-| `ATLAS_K8S_NAMESPACE` | `default` | Namespace for app Deployments |
-| `ATLAS_INGRESS_DOMAIN` | — | Base domain for apps (`portfolio.homelab.local`); empty skips Ingress |
-| `ATLAS_INGRESS_CLASS` | — | Ingress class (e.g. `traefik` on k3s) |
-| `ATLAS_INGRESS_TLS_SECRET` | — | Optional TLS Secret name for HTTPS Ingress |
-| `ATLAS_DB_PASSWORD` | `atlas` | Compose Postgres password |
-| `ATLAS_DB_PORT` | `5432` | Compose host port |
-| `ATLAS_TEST_DATABASE_URL` | same as above | Postgres DSN for integration tests |
+| `ATLAS_K8S_NAMESPACE` | `default` | Namespace for Deployments and build Jobs |
+| `ATLAS_INGRESS_DOMAIN` | `edwardscott.dev` | Base domain (`portfolio.edwardscott.dev`) |
+| `ATLAS_INGRESS_CLASS` | `traefik` | Ingress class |
+| `ATLAS_INGRESS_TLS_SECRET` | — | Optional in-cluster TLS (usually empty; Cloudflare terminates TLS) |
+| `CLOUDFLARE_TUNNEL_TOKEN` | — | **Required** for `make up` — Cloudflare Tunnel Docker token |
 
-`make run` loads `.env` if present. Docker Compose reads `.env` automatically.
+## Development
 
-## Make targets
-
+```bash
+make up        # full stack
+make down      # tear down
+make logs      # api / postgres / tunnel
+make test      # Go tests
+make web-dev   # UI hot reload (API on :8080)
 ```
-make help      # Show available targets
-make build     # Build atlas-api binary
-make run       # Run the API server
-make test      # Run Go tests
-make db-up     # Start Postgres
-make db-down   # Stop Postgres
-make db-logs   # Follow Postgres logs
-make migrate   # Apply database migrations
-```
+
+- [docs/cloudflare.md](docs/cloudflare.md) — tunnel + DNS  
+- [docs/github-app.md](docs/github-app.md) — GitHub App registration  
+- [TODO.md](TODO.md) — planned work (Redis add-ons, env vars, log streaming, deploy phases)
 
 ## License
 
-Private — homelab project.
+Private — personal portfolio project.
