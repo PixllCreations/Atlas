@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -12,12 +13,16 @@ import (
 
 const defaultContainerPort int32 = 80
 
-// DeployOptions configures a Deployment for an app.
+// DeployOptions configures a Deployment for an app or dependency.
 type DeployOptions struct {
-	Namespace string
-	Name      string
-	Image     string
-	Port      int32
+	Namespace   string
+	Name        string
+	Image       string
+	Port        int32
+	Env         []corev1.EnvVar
+	Labels      map[string]string
+	ProjectID   string
+	ProjectName string
 }
 
 // EnsureDeployment creates or updates a Deployment to run image.
@@ -34,6 +39,7 @@ func (c *Client) EnsureDeployment(ctx context.Context, opts DeployOptions) error
 	if opts.Port == 0 {
 		opts.Port = defaultContainerPort
 	}
+	opts.Env = NormalizeEnv(opts.Env)
 
 	dep := desiredDeployment(opts)
 	apps := c.clientset.AppsV1().Deployments(opts.Namespace)
@@ -51,8 +57,15 @@ func (c *Client) EnsureDeployment(ctx context.Context, opts DeployOptions) error
 		return fmt.Errorf("get deployment: %w", err)
 	}
 
+	if len(existing.Spec.Template.Spec.Containers) == 0 {
+		return fmt.Errorf("update deployment: existing deployment has no containers")
+	}
+
+	existing.Labels = MergeLabels(existing.Labels, dep.Labels)
+	existing.Spec.Template.Labels = MergeLabels(existing.Spec.Template.Labels, dep.Spec.Template.Labels)
 	existing.Spec.Template.Spec.Containers[0].Image = opts.Image
 	existing.Spec.Template.Spec.Containers[0].Ports = containerPorts(opts.Port)
+	existing.Spec.Template.Spec.Containers[0].Env = opts.Env
 	_, err = apps.Update(ctx, existing, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("update deployment: %w", err)
@@ -60,11 +73,23 @@ func (c *Client) EnsureDeployment(ctx context.Context, opts DeployOptions) error
 	return nil
 }
 
-func desiredDeployment(opts DeployOptions) *appsv1.Deployment {
-	labels := map[string]string{
-		"app":                         opts.Name,
-		"app.kubernetes.io/managed-by": "atlas",
+// NormalizeEnv returns a stable sorted copy of env vars by name.
+func NormalizeEnv(env []corev1.EnvVar) []corev1.EnvVar {
+	if len(env) == 0 {
+		return nil
 	}
+	out := make([]corev1.EnvVar, len(env))
+	copy(out, env)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func desiredDeployment(opts DeployOptions) *appsv1.Deployment {
+	labels := ProjectLabels(opts.ProjectID, opts.ProjectName)
+	labels["app"] = opts.Name
+	labels = MergeLabels(labels, opts.Labels)
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -87,6 +112,7 @@ func desiredDeployment(opts DeployOptions) *appsv1.Deployment {
 							Image:           opts.Image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports:           containerPorts(opts.Port),
+							Env:             opts.Env,
 						},
 					},
 				},
@@ -107,4 +133,36 @@ func containerPorts(port int32) []corev1.ContainerPort {
 			Protocol:      corev1.ProtocolTCP,
 		},
 	}
+}
+
+// ListManagedDependencyDeployments lists Atlas-managed dependency Deployments in a namespace.
+func (c *Client) ListManagedDependencyDeployments(ctx context.Context, namespace, projectID string) ([]appsv1.Deployment, error) {
+	if namespace == "" {
+		namespace = "default"
+	}
+	selector := fmt.Sprintf("%s=%s,%s=%s", LabelManagedBy, LabelManagedByValue, LabelComponent, ComponentDependency)
+	if projectID != "" {
+		selector += fmt.Sprintf(",%s=%s", LabelProjectID, projectID)
+	}
+	list, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("list dependency deployments: %w", err)
+	}
+	return list.Items, nil
+}
+
+// ListManagedDependencyServices lists Atlas-managed dependency Services in a namespace.
+func (c *Client) ListManagedDependencyServices(ctx context.Context, namespace, projectID string) ([]corev1.Service, error) {
+	if namespace == "" {
+		namespace = "default"
+	}
+	selector := fmt.Sprintf("%s=%s,%s=%s", LabelManagedBy, LabelManagedByValue, LabelComponent, ComponentDependency)
+	if projectID != "" {
+		selector += fmt.Sprintf(",%s=%s", LabelProjectID, projectID)
+	}
+	list, err := c.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("list dependency services: %w", err)
+	}
+	return list.Items, nil
 }

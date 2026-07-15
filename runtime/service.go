@@ -12,12 +12,16 @@ import (
 
 const defaultServicePort int32 = 80
 
-// ServiceOptions configures a ClusterIP Service for an app.
+// ServiceOptions configures a ClusterIP Service for an app or dependency.
 type ServiceOptions struct {
 	Namespace     string
 	Name          string
 	Port          int32 // service port (Ingress targets this); defaults to 80
 	ContainerPort int32 // pod target port; defaults to Port
+	PortName      string
+	Labels        map[string]string
+	ProjectID     string
+	ProjectName   string
 }
 
 // EnsureService creates or updates a ClusterIP Service that selects pods by app label.
@@ -33,6 +37,9 @@ func (c *Client) EnsureService(ctx context.Context, opts ServiceOptions) error {
 	}
 	if opts.ContainerPort == 0 {
 		opts.ContainerPort = opts.Port
+	}
+	if opts.PortName == "" {
+		opts.PortName = "http"
 	}
 
 	svc := desiredService(opts)
@@ -51,10 +58,11 @@ func (c *Client) EnsureService(ctx context.Context, opts ServiceOptions) error {
 		return fmt.Errorf("get service: %w", err)
 	}
 
+	existing.Labels = MergeLabels(existing.Labels, svc.Labels)
 	existing.Spec.Selector = map[string]string{"app": opts.Name}
 	existing.Spec.Ports = []corev1.ServicePort{
 		{
-			Name:       "http",
+			Name:       opts.PortName,
 			Port:       opts.Port,
 			TargetPort: intstr.FromInt32(opts.ContainerPort),
 			Protocol:   corev1.ProtocolTCP,
@@ -68,10 +76,9 @@ func (c *Client) EnsureService(ctx context.Context, opts ServiceOptions) error {
 }
 
 func desiredService(opts ServiceOptions) *corev1.Service {
-	labels := map[string]string{
-		"app":                          opts.Name,
-		"app.kubernetes.io/managed-by": "atlas",
-	}
+	labels := ProjectLabels(opts.ProjectID, opts.ProjectName)
+	labels["app"] = opts.Name
+	labels = MergeLabels(labels, opts.Labels)
 
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -83,7 +90,7 @@ func desiredService(opts ServiceOptions) *corev1.Service {
 			Selector: map[string]string{"app": opts.Name},
 			Ports: []corev1.ServicePort{
 				{
-					Name:       "http",
+					Name:       opts.PortName,
 					Port:       opts.Port,
 					TargetPort: intstr.FromInt32(opts.ContainerPort),
 					Protocol:   corev1.ProtocolTCP,

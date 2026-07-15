@@ -17,6 +17,9 @@ type IngressOptions struct {
 	Port             int32
 	IngressClassName string
 	TLSSecretName    string
+	Labels           map[string]string
+	ProjectID        string
+	ProjectName      string
 }
 
 // EnsureIngress creates or updates an Ingress routing host to the app's Service.
@@ -50,6 +53,7 @@ func (c *Client) EnsureIngress(ctx context.Context, opts IngressOptions) error {
 		return fmt.Errorf("get ingress: %w", err)
 	}
 
+	existing.Labels = MergeLabels(existing.Labels, desiredIngress(opts).Labels)
 	existing.Spec.IngressClassName = ingressClassName(opts.IngressClassName)
 	existing.Spec.Rules = ingressRules(opts)
 	existing.Spec.TLS = ingressTLS(opts)
@@ -61,10 +65,9 @@ func (c *Client) EnsureIngress(ctx context.Context, opts IngressOptions) error {
 }
 
 func desiredIngress(opts IngressOptions) *networkingv1.Ingress {
-	labels := map[string]string{
-		"app":                          opts.Name,
-		"app.kubernetes.io/managed-by": "atlas",
-	}
+	labels := ProjectLabels(opts.ProjectID, opts.ProjectName)
+	labels["app"] = opts.Name
+	labels = MergeLabels(labels, opts.Labels)
 
 	className := ingressClassName(opts.IngressClassName)
 	return &networkingv1.Ingress{
