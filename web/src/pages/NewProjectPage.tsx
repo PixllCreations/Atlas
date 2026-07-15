@@ -1,24 +1,24 @@
-import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { api } from '../api/client'
+import { useState, type SubmitEvent } from "react";
+import { useNavigate } from "react-router-dom";
+import { api } from "../api/client";
 
 export function NewProjectPage() {
-  const navigate = useNavigate()
-  const [name, setName] = useState('')
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const navigate = useNavigate();
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault()
-    setError('')
-    setSaving(true)
+  async function onSubmit(e: SubmitEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError("");
+    setSaving(true);
     try {
-      const app = await api.createApp(name.trim())
-      navigate(`/projects/${app.id}`)
+      const app = await api.createApp(name.trim());
+      navigate(`/projects/${app.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create')
+      setError(err instanceof Error ? err.message : "Failed to create");
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
@@ -32,7 +32,10 @@ export function NewProjectPage() {
       </div>
 
       <div className="panel">
-        <form className="form" onSubmit={onSubmit}>
+        <form
+          className="form"
+          onSubmit={onSubmit}
+        >
           <div className="field">
             <label htmlFor="name">Project name</label>
             <input
@@ -47,11 +50,15 @@ export function NewProjectPage() {
             />
           </div>
           {error && <p className="error">{error}</p>}
-          <button className="btn btn-primary" type="submit" disabled={saving || !name.trim()}>
-            {saving ? 'Creating…' : 'Create project'}
+          <button
+            className="btn btn-primary"
+            type="submit"
+            disabled={saving || !name.trim()}
+          >
+            {saving ? "Creating…" : "Create project"}
           </button>
         </form>
       </div>
     </>
-  )
+  );
 }

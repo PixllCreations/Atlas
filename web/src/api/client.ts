@@ -51,6 +51,21 @@ export type Status = {
   github_installations?: GitHubInstallation[]
 }
 
+export type InfrastructureDependency = {
+  name: string
+  type: string
+  endpoint?: string
+  status?: string
+}
+
+export type Infrastructure = {
+  namespace: string
+  host?: string
+  app_name: string
+  app_port: number
+  dependencies: InfrastructureDependency[]
+}
+
 export type TriggerBuildResponse = {
   status: string
   app_id: string
@@ -110,6 +125,8 @@ export const api = {
   listBuilds: (id: string) => request<Build[]>(`/apps/${id}/builds`),
   triggerBuild: (id: string) =>
     request<TriggerBuildResponse>(`/apps/${id}/builds`, { method: 'POST' }),
+  getInfrastructure: (id: string) =>
+    request<Infrastructure>(`/apps/${id}/infrastructure`),
 
   getStatus: () => request<Status>('/status'),
 

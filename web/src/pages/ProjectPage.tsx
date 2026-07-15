@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type SubmitEvent } from 'react'
 import { Link, NavLink, useParams } from 'react-router-dom'
-import { api, type App, type Build, type GitHubRepo, type Repo, type Status } from '../api/client'
+import { api, type App, type Build, type GitHubRepo, type Infrastructure, type Repo, type Status } from '../api/client'
 import { formatTime, StatusBadge } from '../components/StatusBadge'
 import { appPublicURL } from '../lib/urls'
 
@@ -9,6 +9,7 @@ export function ProjectPage() {
   const [app, setApp] = useState<App | null>(null)
   const [repo, setRepo] = useState<Repo | null>(null)
   const [builds, setBuilds] = useState<Build[]>([])
+  const [infra, setInfra] = useState<Infrastructure | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
   const [url, setUrl] = useState('')
   const [branch, setBranch] = useState('main')
@@ -19,16 +20,18 @@ export function ProjectPage() {
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [a, r, b, st] = await Promise.all([
+    const [a, r, b, st, inf] = await Promise.all([
       api.getApp(id),
       api.getRepo(id),
       api.listBuilds(id),
       api.getStatus(),
+      api.getInfrastructure(id),
     ])
     setApp(a)
     setRepo(r)
     setBuilds(b)
     setStatus(st)
+    setInfra(inf)
     if (r) {
       setUrl(r.url)
       setBranch(r.branch)
@@ -87,7 +90,7 @@ export function ProjectPage() {
     return () => clearInterval(t)
   }, [builds, refresh])
 
-  async function linkManualRepo(e: FormEvent) {
+  async function linkManualRepo(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     setBusy(true)
     setError('')
@@ -101,7 +104,7 @@ export function ProjectPage() {
     }
   }
 
-  async function linkGitHubRepo(e: FormEvent) {
+  async function linkGitHubRepo(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!installationId || !selectedRepo) return
     setBusy(true)
@@ -319,6 +322,52 @@ export function ProjectPage() {
             secret <code>ATLAS_WEBHOOK_SECRET</code>, or set up the GitHub App env vars for automatic webhooks.
           </div>
         )}
+      </div>
+
+      <div className="panel">
+        <h2>Dependencies</h2>
+        {!infra || infra.dependencies.length === 0 ? (
+          <p className="muted">
+            No managed dependencies. Declare them in <code>atlas.yaml</code> at the repository root.
+          </p>
+        ) : (
+          <ul className="build-list">
+            {infra.dependencies.map((d) => (
+              <li key={d.name} className="build-item">
+                <div>
+                  <div style={{ textTransform: 'capitalize' }}>{d.type}</div>
+                  <div className="muted" style={{ marginTop: '0.25rem' }}>
+                    Type <span className="mono">{d.type}</span>
+                    {d.endpoint ? (
+                      <>
+                        {' '}
+                        · Endpoint <span className="mono">{d.endpoint}</span>
+                      </>
+                    ) : null}
+                    {d.status ? (
+                      <>
+                        {' '}
+                        · {d.status}
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <span className="mono muted">{d.name}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {infra?.app_port ? (
+          <div className="hint">
+            App listens on port <span className="mono">{infra.app_port}</span>
+            {infra.namespace ? (
+              <>
+                {' '}
+                · namespace <span className="mono">{infra.namespace}</span>
+              </>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="panel">
