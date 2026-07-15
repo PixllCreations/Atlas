@@ -81,6 +81,28 @@ func (f *fakeBuildStore) UpdateBuildImage(_ context.Context, id string, image st
 	return b, nil
 }
 
+func (f *fakeBuildStore) UpdateBuildPhase(_ context.Context, id string, phase Phase) (Build, error) {
+	b, ok := f.builds[id]
+	if !ok {
+		return Build{}, errors.New("build not found")
+	}
+	b.Phase = phase
+	b.UpdatedAt = time.Now()
+	f.builds[id] = b
+	return b, nil
+}
+
+func (f *fakeBuildStore) AppendBuildLog(_ context.Context, id string, chunk string) error {
+	b, ok := f.builds[id]
+	if !ok {
+		return errors.New("build not found")
+	}
+	b.Log += chunk
+	b.UpdatedAt = time.Now()
+	f.builds[id] = b
+	return nil
+}
+
 func (f *fakeBuildStore) UpdateAppDeploymentSnapshot(_ context.Context, id string, snapshot []byte) error {
 	if f.apps != nil {
 		if _, ok := f.apps[id]; !ok {
@@ -161,10 +183,14 @@ func (f *fakeDeployer) EnsureBuildJob(_ context.Context, opts runtime.BuildJobOp
 	return nil
 }
 
-func (f *fakeDeployer) WaitForBuildJob(_ context.Context, namespace, buildID string) error {
+func (f *fakeDeployer) WaitForBuildJob(_ context.Context, namespace, buildID string, _ func(string)) error {
 	f.waitNS = namespace
 	f.waitBuildID = buildID
 	return nil
+}
+
+func (f *fakeDeployer) TailBuildJobLogs(context.Context, string, string) (string, error) {
+	return "", nil
 }
 
 func (f *fakeDeployer) EnsureNamespace(_ context.Context, opts runtime.NamespaceOptions) error {
