@@ -20,7 +20,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/atlas-a
 
 # --- Runtime ---
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates postgresql-client wget \
+# git is required: the worker shallow-clones repos on the API host to read atlas.yaml
+# before Kaniko/host builds.
+RUN apk add --no-cache ca-certificates git postgresql-client wget \
 	&& adduser -D -u 1000 atlas
 WORKDIR /home/atlas
 
