@@ -15,11 +15,11 @@ func (s *Store) CreateApp(ctx context.Context, name string) (app.App, error) {
 	const q = `
 		INSERT INTO apps (name)
 		VALUES ($1)
-		RETURNING id, name, port, created_at, updated_at
+		RETURNING id, name, port, deployment_snapshot, created_at, updated_at
 	`
 
 	var a app.App
-	err := s.pool.QueryRow(ctx, q, name).Scan(&a.ID, &a.Name, &a.Port, &a.CreatedAt, &a.UpdatedAt)
+	err := s.pool.QueryRow(ctx, q, name).Scan(&a.ID, &a.Name, &a.Port, &a.DeploymentSnapshot, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return app.App{}, fmt.Errorf("insert app: %w", err)
 	}
@@ -28,13 +28,13 @@ func (s *Store) CreateApp(ctx context.Context, name string) (app.App, error) {
 
 func (s *Store) GetApp(ctx context.Context, id string) (app.App, error) {
 	const q = `
-		SELECT id, name, port, created_at, updated_at
+		SELECT id, name, port, deployment_snapshot, created_at, updated_at
 		FROM apps
 		WHERE id = $1
 	`
 
 	var a app.App
-	err := s.pool.QueryRow(ctx, q, id).Scan(&a.ID, &a.Name, &a.Port, &a.CreatedAt, &a.UpdatedAt)
+	err := s.pool.QueryRow(ctx, q, id).Scan(&a.ID, &a.Name, &a.Port, &a.DeploymentSnapshot, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.App{}, ErrNotFound
 	}
@@ -46,7 +46,7 @@ func (s *Store) GetApp(ctx context.Context, id string) (app.App, error) {
 
 func (s *Store) ListApps(ctx context.Context) ([]app.App, error) {
 	const q = `
-		SELECT id, name, port, created_at, updated_at
+		SELECT id, name, port, deployment_snapshot, created_at, updated_at
 		FROM apps
 		ORDER BY created_at
 	`
@@ -60,7 +60,7 @@ func (s *Store) ListApps(ctx context.Context) ([]app.App, error) {
 	apps := make([]app.App, 0)
 	for rows.Next() {
 		var a app.App
-		if err := rows.Scan(&a.ID, &a.Name, &a.Port, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Port, &a.DeploymentSnapshot, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan app: %w", err)
 		}
 		apps = append(apps, a)
@@ -79,10 +79,10 @@ func (s *Store) UpdateAppPort(ctx context.Context, id string, port int) (app.App
 		UPDATE apps
 		SET port = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, name, port, created_at, updated_at
+		RETURNING id, name, port, deployment_snapshot, created_at, updated_at
 	`
 	var a app.App
-	err := s.pool.QueryRow(ctx, q, id, port).Scan(&a.ID, &a.Name, &a.Port, &a.CreatedAt, &a.UpdatedAt)
+	err := s.pool.QueryRow(ctx, q, id, port).Scan(&a.ID, &a.Name, &a.Port, &a.DeploymentSnapshot, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.App{}, ErrNotFound
 	}
@@ -90,6 +90,23 @@ func (s *Store) UpdateAppPort(ctx context.Context, id string, port int) (app.App
 		return app.App{}, fmt.Errorf("update app port: %w", err)
 	}
 	return a, nil
+}
+
+// UpdateAppDeploymentSnapshot stores the last successful deploy infrastructure snapshot.
+func (s *Store) UpdateAppDeploymentSnapshot(ctx context.Context, id string, snapshot []byte) error {
+	const q = `
+		UPDATE apps
+		SET deployment_snapshot = $2, updated_at = now()
+		WHERE id = $1
+	`
+	tag, err := s.pool.Exec(ctx, q, id, snapshot)
+	if err != nil {
+		return fmt.Errorf("update deployment snapshot: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) DeleteApp(ctx context.Context, id string) error {
