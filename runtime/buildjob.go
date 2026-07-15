@@ -55,7 +55,8 @@ func (c *Client) EnsureBuildJob(ctx context.Context, opts BuildJobOptions) error
 }
 
 // WaitForBuildJob blocks until the build Job succeeds or fails.
-func (c *Client) WaitForBuildJob(ctx context.Context, namespace, buildID string) error {
+// onLogs, when non-nil, is called periodically with the full current Job log snapshot.
+func (c *Client) WaitForBuildJob(ctx context.Context, namespace, buildID string, onLogs func(string)) error {
 	if buildID == "" {
 		return fmt.Errorf("build job: build id is required")
 	}
@@ -68,20 +69,36 @@ func (c *Client) WaitForBuildJob(ctx context.Context, namespace, buildID string)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
+	emitLogs := func() {
+		if onLogs == nil {
+			return
+		}
+		logs, err := c.TailBuildJobLogs(ctx, namespace, buildID)
+		if err != nil || logs == "" {
+			return
+		}
+		onLogs(logs)
+	}
+
 	for {
 		job, err := jobs.Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("get build job: %w", err)
 		}
 
+		emitLogs()
+
 		if job.Status.Succeeded > 0 {
+			emitLogs()
 			return nil
 		}
 		for _, cond := range job.Status.Conditions {
 			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+				emitLogs()
 				return nil
 			}
 			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+				emitLogs()
 				msg := strings.TrimSpace(cond.Message)
 				if msg == "" {
 					msg = "build job failed"
@@ -90,6 +107,7 @@ func (c *Client) WaitForBuildJob(ctx context.Context, namespace, buildID string)
 			}
 		}
 		if job.Status.Failed > 0 {
+			emitLogs()
 			return fmt.Errorf("build job failed")
 		}
 
