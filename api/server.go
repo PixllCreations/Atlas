@@ -36,12 +36,23 @@ func New(opts Options) *Server {
 	RegisterApps(mux, opts.Store, opts.Deployer, opts.WorkerConfig.Namespace)
 	RegisterRepos(mux, opts.Store, opts.GitHub)
 	RegisterBuilds(mux, opts.Store, worker)
+	RegisterWorkloads(mux, opts.Store, asWorkloadRuntime(opts.Deployer))
 	RegisterWebhooks(mux, opts.Store, opts.WebhookSecret, worker)
 	RegisterGitHubAuth(mux, opts.GitHub, opts.Store, opts.WebhookSecret)
 	RegisterGitHubAPI(mux, opts.GitHub, opts.Store)
 	RegisterUI(mux)
 
 	return s
+}
+
+func asWorkloadRuntime(d build.Deployer) WorkloadRuntime {
+	if d == nil {
+		return nil
+	}
+	if rt, ok := d.(WorkloadRuntime); ok {
+		return rt
+	}
+	return nil
 }
 
 func (s *Server) Run() error {
