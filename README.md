@@ -80,7 +80,9 @@ UI routes use `/projects/...` and `/system` so they do not collide with the JSON
 | 3 | Builds (clone, Kaniko/Docker, push) | Done |
 | 4 | k3s Deploy/Service/Ingress + console | Done |
 | 5 | `atlas.yaml`, project namespaces, Redis provisioner, plan reconcile | Done |
-| 6+ | User env / secrets UI, more deps (Postgres…), deploy phases, log streaming | Planned — see [TODO.md](TODO.md) |
+| 6 | Deploy phases + live build log streaming (SSE) | Done |
+| 7 | Runtime pod logs per workload/service | Done |
+| 8+ | User env / secrets UI, more deps (Postgres…) | Planned — see [TODO.md](TODO.md) |
 
 ## Repository requirements
 

@@ -15,6 +15,9 @@ Atlas is a self-hosted, config-driven PaaS (Go API + embedded React UI + Postgre
 - Root `atlas.yaml` → parse/validate → `DeploymentPlan` → reconcile Deploy/Service/Ingress
 - Managed **Redis** dependency (ClusterIP only, injects `REDIS_URL` + `PORT`)
 - Infrastructure snapshot API + read-only Dependencies panel on the project page
+- Build phases (`queued` → `cloning` → `building` → `pushing` → `deploying`) + project page step UX
+- Live build logs over SSE (`GET /apps/{id}/builds/{build_id}/logs?follow=1`) + log panel
+- Runtime pod logs per service (`GET /apps/{id}/workloads`, `.../workloads/{name}/logs?follow=1`)
 - Public apps via Cloudflare Tunnel (`*.edwardscott.dev`); webhooks on `hooks.edwardscott.dev`
 - Console on Tailscale / localhost `:8080`
 
@@ -22,10 +25,9 @@ Atlas is a self-hosted, config-driven PaaS (Go API + embedded React UI + Postgre
 
 **Still coarse**
 
-- Build status is `pending | running | succeeded | failed` (no phases)
-- No live log streaming in the UI
 - No user-defined secrets/env in the console (only atlas/plan-injected vars)
 - Only Redis is provisioned; Postgres/NATS types are rejected
+- Secret redaction in logs deferred until user secrets exist
 
 ---
 
@@ -55,30 +57,22 @@ Keep opinionated: reject unsupported options rather than half-configured templat
 
 ---
 
-## 3. Deploy phases + loading UX
+## 3. Deploy phases + loading UX — done
 
-**Goal:** Show Cloning → Building → Pushing → Deploying instead of a single `running` chip.
-
-- `builds.phase` (or events table) updated in `build/worker.go`
-- Project page step list + elapsed time
-- Disable Deploy while a build is active
+Show Cloning → Building → Pushing → Deploying via `builds.phase`, step list + elapsed time, Deploy disabled while active.
 
 ---
 
-## 4. Live build / runtime logs
+## 4. Live build / runtime logs — done
 
-**Goal:** Stream Kaniko Job and app pod logs into the console (SSE preferred).
-
-- `GET /apps/{id}/builds/{buildId}/logs?follow=1`
-- Scope to project namespace labels
-- Redact secret env values when secrets exist
+Stream build logs via SSE. Runtime tab streams selected workload pod logs (`app`, `redis`, …) from the project namespace.
 
 ---
 
 ## Suggested order
 
-1. Deploy phases (#3) — quick UX win  
-2. Log streaming (#4) — pairs with phases  
+1. ~~Deploy phases (#3)~~  
+2. ~~Log streaming (#4)~~  
 3. User env (#1) — unlocks app-specific config without new deps  
 4. Postgres provisioner (#2) — next managed dependency  
 
