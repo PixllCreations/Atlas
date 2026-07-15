@@ -1,7 +1,6 @@
 export type App = {
   id: string
   name: string
-  port: number
   created_at: string
   updated_at: string
 }
@@ -97,8 +96,6 @@ export const api = {
   getApp: (id: string) => request<App>(`/apps/${id}`),
   createApp: (name: string) =>
     request<App>('/apps', { method: 'POST', body: JSON.stringify({ name }) }),
-  updateAppPort: (id: string, port: number) =>
-    request<App>(`/apps/${id}`, { method: 'PATCH', body: JSON.stringify({ port }) }),
   deleteApp: (id: string) => request<void>(`/apps/${id}`, { method: 'DELETE' }),
 
   getRepo: async (id: string): Promise<Repo | null> => {

@@ -225,7 +225,7 @@ func containsApp(apps []appResponse, id string) bool {
 func ensureAppsTable(t *testing.T, ctx context.Context, dsn string) {
 	t.Helper()
 
-	for _, name := range []string{"001_apps.sql", "006_app_port.sql", "007_deployment_snapshot.sql"} {
+	for _, name := range []string{"001_apps.sql", "006_app_port.sql", "007_deployment_snapshot.sql", "008_drop_app_port.sql"} {
 		sql, err := os.ReadFile("../store/migrations/" + name)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)

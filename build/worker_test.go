@@ -117,7 +117,7 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
 	store.apps = map[string]app.App{
-		"app-1": {ID: "app-1", Name: "demo", Port: 80},
+		"app-1": {ID: "app-1", Name: "demo"},
 	}
 	worker := NewWorker(store, WorkerConfig{Registry: "localhost:5000"}, nil, nil)
 	worker.clone = writeAtlasYAMLClone(t, "")
@@ -223,7 +223,7 @@ func TestWorker_ProcessPendingBuildJobPath(t *testing.T) {
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
 	store.apps = map[string]app.App{
-		"app-1": {ID: "app-1", Name: "portfolio", Port: 80},
+		"app-1": {ID: "app-1", Name: "portfolio"},
 	}
 
 	deployer := &fakeDeployer{}

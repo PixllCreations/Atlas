@@ -11,7 +11,6 @@ export function ProjectSettingsPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState('')
-  const [port, setPort] = useState('80')
 
   useEffect(() => {
     let cancelled = false
@@ -26,7 +25,6 @@ export function ProjectSettingsPage() {
           setApp(a)
           setRepo(r)
           setStatus(st)
-          setPort(String(a.port || 80))
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load')
@@ -36,25 +34,6 @@ export function ProjectSettingsPage() {
       cancelled = true
     }
   }, [id])
-
-  async function savePort() {
-    const n = Number(port)
-    if (!Number.isInteger(n) || n < 1 || n > 65535) {
-      setError('Port must be an integer between 1 and 65535')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      const updated = await api.updateAppPort(id, n)
-      setApp(updated)
-      setPort(String(updated.port))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update port')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   async function unlink() {
     setBusy(true)
@@ -130,34 +109,6 @@ export function ProjectSettingsPage() {
         )}
       </div>
 
-      <div className="panel">
-        <h2>Container port</h2>
-        <p className="muted" style={{ margin: 0 }}>
-          Port your process listens on inside the container (Atlas Service stays on 80 and forwards here).
-          Redeploy after changing this.
-        </p>
-        <div className="field" style={{ maxWidth: 200, marginTop: '0.75rem' }}>
-          <label htmlFor="container-port">Port</label>
-          <input
-            id="container-port"
-            type="number"
-            min={1}
-            max={65535}
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-          />
-        </div>
-        <button
-          className="btn btn-secondary"
-          type="button"
-          style={{ marginTop: '0.85rem' }}
-          onClick={() => void savePort()}
-          disabled={busy || String(app.port) === port}
-        >
-          Save port
-        </button>
-      </div>
-
       {githubApp ? (
         <div className="panel">
           <h2>GitHub App</h2>
@@ -208,7 +159,8 @@ export function ProjectSettingsPage() {
       <div className="panel danger-zone">
         <h2>Delete project</h2>
         <p className="muted">
-          Removes the Deployment, Service, and Ingress from the cluster, then deletes the project record.
+          Deletes the project Kubernetes namespace (<code className="mono">atlas-{app.name}</code>) and the Atlas
+          project record.
         </p>
         <div className="field" style={{ maxWidth: 360, marginTop: '0.75rem' }}>
           <label htmlFor="confirm">Type {app.name} to confirm</label>

@@ -55,14 +55,3 @@ func (c *Client) DeleteIngress(ctx context.Context, namespace, name string) erro
 	}
 	return nil
 }
-
-// TeardownApp removes Ingress, Service, and Deployment for an app.
-func (c *Client) TeardownApp(ctx context.Context, namespace, name string) error {
-	if err := c.DeleteIngress(ctx, namespace, name); err != nil {
-		return err
-	}
-	if err := c.DeleteService(ctx, namespace, name); err != nil {
-		return err
-	}
-	return c.DeleteDeployment(ctx, namespace, name)
-}

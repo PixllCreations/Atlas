@@ -14,17 +14,11 @@ import (
 
 type createAppRequest struct {
 	Name string `json:"name"`
-	Port *int   `json:"port"`
-}
-
-type updateAppRequest struct {
-	Port *int `json:"port"`
 }
 
 type appResponse struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Port      int    `json:"port"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -55,7 +49,6 @@ func RegisterApps(mux *http.ServeMux, st *store.Store, deployer build.Deployer, 
 	mux.HandleFunc("GET /apps", h.list)
 	mux.HandleFunc("POST /apps", h.create)
 	mux.HandleFunc("GET /apps/{id}", h.get)
-	mux.HandleFunc("PATCH /apps/{id}", h.update)
 	mux.HandleFunc("DELETE /apps/{id}", h.delete)
 	mux.HandleFunc("GET /apps/{id}/infrastructure", h.infrastructure)
 }
@@ -90,13 +83,6 @@ func (h *appsHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create app")
 		return
 	}
-	if req.Port != nil {
-		a, err = h.store.UpdateAppPort(r.Context(), a.ID, *req.Port)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid port")
-			return
-		}
-	}
 	writeJSON(w, http.StatusCreated, toAppResponse(a))
 }
 
@@ -114,35 +100,6 @@ func (h *appsHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get app")
-		return
-	}
-	writeJSON(w, http.StatusOK, toAppResponse(a))
-}
-
-func (h *appsHandler) update(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "id is required")
-		return
-	}
-
-	var req updateAppRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.Port == nil {
-		writeError(w, http.StatusBadRequest, "port is required")
-		return
-	}
-
-	a, err := h.store.UpdateAppPort(r.Context(), id, *req.Port)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "app not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid port")
 		return
 	}
 	writeJSON(w, http.StatusOK, toAppResponse(a))
@@ -221,11 +178,7 @@ func (h *appsHandler) infrastructure(w http.ResponseWriter, r *http.Request) {
 	resp := infrastructureResponse{
 		Namespace:    plan.NamespaceName(a.Name),
 		AppName:      plan.ApplicationName,
-		AppPort:      a.Port,
 		Dependencies: []infrastructureDependency{},
-	}
-	if resp.AppPort == 0 {
-		resp.AppPort = app.DefaultPort
 	}
 
 	if len(a.DeploymentSnapshot) > 0 {
@@ -268,14 +221,9 @@ func (h *appsHandler) infrastructure(w http.ResponseWriter, r *http.Request) {
 }
 
 func toAppResponse(a app.App) appResponse {
-	port := a.Port
-	if port == 0 {
-		port = app.DefaultPort
-	}
 	return appResponse{
 		ID:        a.ID,
 		Name:      a.Name,
-		Port:      port,
 		CreatedAt: a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt: a.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}

@@ -17,23 +17,28 @@ Phase 4 already requires a Kubernetes cluster for deploys. The cluster can also 
 
 ## Decision
 
-When Kubernetes is available, Atlas runs each build as a **Batch Job** in the deploy namespace:
+When Kubernetes is available, Atlas runs each **image build** as a **Batch Job** in the system namespace (`ATLAS_K8S_NAMESPACE`):
 
-1. **Init container** — shallow `git clone` into a shared `emptyDir` volume
-2. **Main container** — [Kaniko](https://github.com/GoogleContainerTools/kaniko) builds the Dockerfile and pushes directly to the registry
+1. **Worker (API host)** — shallow-clones the repo once to read and validate `atlas.yaml` (requires `git` in the API image)
+2. **Init container (Job)** — shallow `git clone` into a shared `emptyDir` for the build context
+3. **Main container** — [Kaniko](https://github.com/GoogleContainerTools/kaniko) builds the Dockerfile and pushes to the registry
 
 Job naming: `atlas-build-<build-id>` (one Job per build attempt).
+
+Application workloads are **not** created in the system namespace. After a successful build, Atlas applies a `DeploymentPlan` into `atlas-<project-name>` (app + managed dependencies + Ingress).
 
 The worker:
 
 - Creates the Job after marking the build `running`
 - Waits for Job completion (same synchronous flow as today)
-- On success, saves the registry-qualified image and continues with Deploy → Service → Ingress
+- On success, saves the registry-qualified image and reconciles the project namespace
 - On failure, marks the build `failed`
 
-**Fallback:** If Kubernetes is unreachable, keep the existing host-based build path (ADR-005). This preserves local dev without a cluster.
+**Fallback:** If no deployer/registry Job path is configured, keep the host-based build path (ADR-005) using the same checkout that provided `atlas.yaml`.
 
 **Registry auth:** Kaniko reads push credentials from a `dockerconfigjson` Secret mounted at `/kaniko/.docker/config.json`. Homelab registries may also need `--insecure` / `--skip-tls-verify` flags (configured via env).
+
+**Private repos:** Supported when the app is linked through the GitHub App (installation token clone URL).
 
 Atlas does **not** (yet):
 
@@ -53,9 +58,9 @@ Atlas does **not** (yet):
 **Negative**
 
 - Requires Kaniko-compatible cluster (works on k3s; needs registry access from the node/pod network)
-- Private git repos need credentials (not supported in v1 — public repos only)
+- API host clones once for `atlas.yaml` in addition to the Job clone (Kaniko architecture trade-off)
 - Job + init container adds latency vs host builds
-- Registry auth secret must be created manually in the namespace
+- Registry auth secret must be created manually in the system namespace
 
 **Follow-ups (out of scope for this ADR)**
 

@@ -1,238 +1,103 @@
 # Atlas — TODO / next work
 
-Continue from this file. Context is current as of **2026-07-14**.
+Context as of **2026-07-15**.
 
 ---
 
 ## Current platform snapshot
 
-Atlas is a self-hosted PaaS (Go API + embedded React UI + Postgres + k3d/k3s).
+Atlas is a self-hosted, config-driven PaaS (Go API + embedded React UI + Postgres + k3d/k3s).
 
 **What works today**
 
-- Apps CRUD, GitHub App install + push webhooks, builds (Kaniko Jobs), registry push
-- Deploy: single container Deployment + ClusterIP Service + Traefik Ingress
-- Per-app **container port** (`apps.port`, default 80; Service `80 → targetPort`)
-- Public apps: `https://<name>.edwardscott.dev` via Cloudflare Tunnel (`*.edwardscott.dev → host.docker.internal:80`)
-- Webhooks: `hooks.edwardscott.dev → http://api:8080` (must be listed **above** the wildcard hostname)
-- Console: `http://localhost:8080` (Tailscale)
+- Apps CRUD, GitHub App install + push webhooks, Kaniko Job builds, registry push
+- Per-project namespaces (`atlas-<name>`), Ownership labels, delete-by-namespace teardown
+- Root `atlas.yaml` → parse/validate → `DeploymentPlan` → reconcile Deploy/Service/Ingress
+- Managed **Redis** dependency (ClusterIP only, injects `REDIS_URL` + `PORT`)
+- Infrastructure snapshot API + read-only Dependencies panel on the project page
+- Public apps via Cloudflare Tunnel (`*.edwardscott.dev`); webhooks on `hooks.edwardscott.dev`
+- Console on Tailscale / localhost `:8080`
 
-**Hard limits right now**
+**Example:** [`we-know-ball`](https://github.com/PixllCreations/we-know-ball) — port `8080`, Redis, root Dockerfile with embedded SPA.
 
-- One process per app (no Redis, Postgres, Nginx sidecars, or compose-style multi-service)
-- No user-defined env vars on Deployments (`runtime/deploy.go` → `DeployOptions` is only `Namespace`, `Name`, `Image`, `Port`)
-- Build status is coarse: `pending | running | succeeded | failed` (`store/builds.go`); UI polls every ~2.5s (`ProjectPage.tsx`)
-- No log streaming API; worker only `log.Printf`s failures
-- Teardown only deletes Ingress / Service / Deployment for the app name — not add-on services
+**Still coarse**
 
-**Motivating example:** `we-know-ball` listens on **8080**, needs **Redis**, homepage had a Gin `Location: ./` redirect loop (fix in that repo). Redis fails with `dial tcp [::1]:6379: connection refused` because Atlas never runs Redis.
-
----
-
-## 1. Add-on / companion services (Redis, Nginx, …)
-
-**Goal:** Declared dependencies that Atlas provisions alongside an app (like Railway plugins / Render disks+redis), not “only the Dockerfile CMD.”
-
-### Suggested design
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| **A. Named add-ons** (`redis`, `postgres`, templates) | Simple UX, opinionated images | Less flexible |
-| **B. Generic “services” table** (image, port, env, volumes) | Flexible (Nginx, custom) | More UI/validation |
-| **C. In-repo `atlas.yaml` / compose subset** | Git-native | Parser + security surface |
-
-**Recommended start: A → grow toward B.**
-
-### Data model (sketch)
-
-```sql
--- per-app companion workload
-app_services (
-  id UUID PK,
-  app_id UUID FK apps,
-  kind TEXT NOT NULL,          -- 'redis' | 'nginx' | 'custom'
-  name TEXT NOT NULL,          -- k8s name suffix, e.g. we-know-ball-redis
-  image TEXT NOT NULL,
-  port INT NOT NULL,
-  env JSONB NOT NULL DEFAULT '{}',
-  status TEXT,
-  unique (app_id, name)
-)
-```
-
-### Runtime work (`runtime/`)
-
-- `EnsureAddonDeployment` + `EnsureAddonService` (ClusterIP only; not on Ingress by default)
-- Wire DNS for the app: inject env like `REDIS_URL=redis://<app>-redis:6379`
-- On app delete: tear down addons too (`api/apps.go` delete path)
-- Optional: Nginx as TLS/static front — usually Traefik already covers HTTP; Nginx add-on is for app-specific reverse proxy / static
-
-### UI / API
-
-- Settings → **Services** → “Add Redis”
-- `POST /apps/{id}/services` `{ "kind": "redis" }`
-- Redeploy (or hot-apply) so main Deployment gets connection env
-
-### Decisions to make later
-
-- Shared Redis vs per-app Redis (start **per-app**)
-- Persistence (`emptyDir` vs PVC)
-- Resource limits / same namespace vs `atlas-addons`
+- Build status is `pending | running | succeeded | failed` (no phases)
+- No live log streaming in the UI
+- No user-defined secrets/env in the console (only atlas/plan-injected vars)
+- Only Redis is provisioned; Postgres/NATS types are rejected
 
 ---
 
-## 2. Configurable env vars for deployed projects
+## 1. User env vars / secrets
 
-**Goal:** User-defined `KEY=VALUE` on the app Deployment (and optionally build Jobs).
+**Goal:** Let operators set extra `KEY=VALUE` on the app Deployment (and mark secrets).
 
-### Data model (sketch)
-
-```sql
-app_env_vars (
-  app_id UUID FK,
-  key TEXT NOT NULL,
-  value TEXT NOT NULL,       -- consider encryption at rest later
-  secret BOOLEAN NOT NULL DEFAULT false,
-  PRIMARY KEY (app_id, key)
-)
-```
-
-### Runtime
-
-- Extend `runtime.DeployOptions` with `Env []corev1.EnvVar`
-- `build/worker.go` `deployApp`: load vars from store; merge with system vars (`PORT`, addon URLs)
-- Optional: Kaniko/build Job env for build-time only (separate flag)
-- Never log secret values
-
-### API / UI
-
-- `GET/PUT /apps/{id}/env` 
-- Settings panel: key/value editor; mask secrets
-- Changing env should prompt **Redeploy** (or auto-rollout Deployment)
-
-### Precedence
-
-1. Atlas system (`PORT`, `ATLAS_*`)
-2. Addon-injected (`REDIS_URL`, …)
-3. User env (user wins if keyed same? **or** forbid overrides of system keys)
+- Store encrypted-at-rest or at least masked in UI
+- Merge into plan env with deterministic precedence: system (`PORT`) → dependency URLs → user env
+- Forbid overriding Atlas/dependency keys
+- Settings UI + redeploy prompt
 
 ---
 
-## 3. Better deploy loading UX
+## 2. More dependency types
 
-**Goal:** Honest progress while a build is `pending`/`running`, not a bar that finishes early then hangs until succeed/fail.
+**Goal:** Grow the provisioner registry without changing the worker switch.
 
-### Current UI behavior
+Candidates:
 
-- `ProjectPage.tsx`: Deploy sets `busy`; polls builds every **2.5s** while any build is `pending`/`running`
-- `StatusBadge` shows `pending` / `running` / `succeeded` / `failed`
-- No real phase progress from the API today (status flips to `running` for the whole clone→build→push→deploy)
+| Type | Notes |
+|------|-------|
+| `postgres` | Pin image; PVC optional phase-2 |
+| `nats` | ClusterIP only |
 
-### Suggested UX
-
-- Replace indeterminate/fake bar with **phase steps** driven by backend:
-  1. Queued  
-  2. Cloning  
-  3. Building image  
-  4. Pushing  
-  5. Deploying  
-  6. Healthy / Failed  
-- Keep polling or upgrade to SSE/WebSocket (ties to #4)
-- Disable Deploy while active; show elapsed time; link to failing step + logs
-
-### Backend needed
-
-- Finer build status or `build_events` / `phase` column updated in `build/worker.go` (`execute`, `runJobBuild`, `deployApp`)
-- Alternatively: derive phase from Job pod phase + Deployment rollout (more k8s-y, less precise for host builds)
-
-**Minimum:** `builds.phase TEXT` + `UpdateBuildPhase` calls at each worker step; UI step list reads `phase`.
+Keep opinionated: reject unsupported options rather than half-configured templates.
 
 ---
 
-## 4. Pass-through logging (live deploy logs in UI)
+## 3. Deploy phases + loading UX
 
-**Goal:** Stream Kaniko/build Job + app deploy logs into the console during/after a build.
+**Goal:** Show Cloning → Building → Pushing → Deploying instead of a single `running` chip.
 
-### Sources
-
-| Phase | Source |
-|-------|--------|
-| Build (Kaniko) | `kubectl logs job/atlas-build-<id> -f` / pod logs |
-| Host build (rare) | worker stdout captured to store/stream |
-| Deploy / runtime | `kubectl logs deploy/<app> -f` |
-
-### API sketch
-
-- `GET /apps/{id}/builds/{buildId}/logs` — SSE (`text/event-stream`) or WebSocket
-- Query: `?follow=1` for live; without follow return stored ring buffer
-- Auth later; for now same trust model as console (private Tailscale)
-
-### Implementation notes
-
-- Prefer **SSE** from API: worker or handler watches pod logs via client-go
-- Persist last N KB in Postgres or object storage so refresh still works
-- UI: terminal-like panel under Deployments; auto-scroll; filter stderr
-- Register route **before** SPA catch-all in `api/ui.go` / mux order
-- Vite proxy: add `/apps` already proxies — ensure EventSource works through proxy (`web/vite.config.ts`)
-
-### Security
-
-- Logs may contain secrets from build args — redact env values marked secret
-- Scope logs to the requesting app’s namespace/name prefix
+- `builds.phase` (or events table) updated in `build/worker.go`
+- Project page step list + elapsed time
+- Disable Deploy while a build is active
 
 ---
 
-## Suggested implementation order
+## 4. Live build / runtime logs
 
-1. **Env vars (#2)** — smallest runtime change; unblocks Redis URL once Redis exists manually  
-2. **Deploy phases + loading UI (#3)** — improves UX immediately; small schema change  
-3. **Log streaming (#4)** — depends on knowing which Job/Deployment; natural fit after phases  
-4. **Add-ons (#1)** — largest; injects env from #2; Redis for `we-know-ball`
+**Goal:** Stream Kaniko Job and app pod logs into the console (SSE preferred).
 
----
-
-## Key files to touch
-
-| Area | Files |
-|------|--------|
-| Deploy | `runtime/deploy.go`, `runtime/service.go`, `build/worker.go` |
-| Store | `store/apps.go`, new migrations, new `store/env.go` / `store/services.go` |
-| API | `api/apps.go`, new `api/env.go`, `api/services.go`, `api/logs.go` |
-| UI | `web/src/pages/ProjectPage.tsx`, `ProjectSettingsPage.tsx`, `web/src/api/client.ts` |
-| Mux / proxy | `api/server.go`, `api/ui.go`, `web/vite.config.ts` |
+- `GET /apps/{id}/builds/{buildId}/logs?follow=1`
+- Scope to project namespace labels
+- Redact secret env values when secrets exist
 
 ---
 
-## Related recent work (don’t regress)
+## Suggested order
 
-- GitHub App: `docs/github-app.md` — **Setup URL** required; sync via `POST /github/installations/sync`
-- Tunnel: `hooks.edwardscott.dev` must win over `*.edwardscott.dev`
-- Container port: migration `006_app_port.sql`; Settings → Container port; Service `port=80` / `targetPort=<app.port>`
-- Tests write to `ATLAS_TEST_DATABASE_URL` (defaults to same DB as Atlas — avoid polluting `github_installations` with fake IDs)
+1. Deploy phases (#3) — quick UX win  
+2. Log streaming (#4) — pairs with phases  
+3. User env (#1) — unlocks app-specific config without new deps  
+4. Postgres provisioner (#2) — next managed dependency  
 
 ---
 
 ## Out of scope / later
 
-- Multi-tenant auth on the console  
-- Preview environments / PR deploys  
-- Custom domains per app beyond `ATLAS_INGRESS_DOMAIN`  
-- Encrypting env-at-rest, sealed secrets  
-- Full docker-compose import  
+- Multi-tenant console auth  
+- PR preview environments  
+- Custom domains beyond `ATLAS_INGRESS_DOMAIN`  
+- Helm / raw YAML import  
+- docker-compose as the domain model  
+- Redis / Postgres PVC persistence (ephemeral is fine for demos)
 
 ---
 
-## Quick verification after implementing
+## Related docs
 
-```bash
-# env
-curl -s localhost:8080/apps/$ID/env
-
-# redis addon → from app pod
-kubectl exec deploy/$NAME -- wget -qO- redis://$NAME-redis:6379
-
-# logs stream
-curl -N localhost:8080/apps/$ID/builds/$BUILD/logs?follow=1
-
-# UI: Deploy shows phases; log panel scrolls; Settings edits env + add Redis
-```
+- [README.md](README.md)  
+- [docs/atlas-yaml.md](docs/atlas-yaml.md)  
+- [docs/github-app.md](docs/github-app.md)  
+- [docs/cloudflare.md](docs/cloudflare.md)  

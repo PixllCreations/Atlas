@@ -52,7 +52,7 @@ export function StatusPage() {
               <div className="value">{status.registry_set ? 'Configured' : 'Not set'}</div>
             </div>
             <div className="status-tile">
-              <div className="label">Namespace</div>
+              <div className="label">Build namespace</div>
               <div className="value mono">{status.namespace}</div>
             </div>
             <div className="status-tile">

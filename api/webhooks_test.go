@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -252,7 +253,12 @@ func openWebhooksTestServer(t *testing.T) (*store.Store, *httptest.Server) {
 	ensureMigrations(t, ctx, dsn)
 
 	return st, testWebhooksServer(t, st, testWebhookSecret, build.NewWorkerWithHooks(st, build.WorkerConfig{}, nil, nil,
-		func(context.Context, string, string, string) error { return nil },
+		func(_ context.Context, _, _, dest string) error {
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(dest, "atlas.yaml"), []byte("version: 1\napp:\n  port: 8080\n"), 0o644)
+		},
 		func(context.Context, string, string) error { return nil },
 		func(context.Context, string, string) error { return nil },
 	))
