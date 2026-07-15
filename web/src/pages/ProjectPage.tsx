@@ -1,8 +1,20 @@
-import { useCallback, useEffect, useState, type SubmitEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type SubmitEvent } from 'react'
 import { Link, NavLink, useParams } from 'react-router-dom'
-import { api, type App, type Build, type GitHubRepo, type Infrastructure, type Repo, type Status } from '../api/client'
+import {
+  api,
+  type App,
+  type Build,
+  type GitHubRepo,
+  type Infrastructure,
+  type Repo,
+  type Status,
+  type Workload,
+} from '../api/client'
+import { BuildPhases } from '../components/BuildPhases'
 import { formatTime, StatusBadge } from '../components/StatusBadge'
 import { appPublicURL } from '../lib/urls'
+
+type LogTab = 'build' | 'runtime'
 
 export function ProjectPage() {
   const { id = '' } = useParams()
@@ -18,6 +30,18 @@ export function ProjectPage() {
   const [selectedRepo, setSelectedRepo] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [logText, setLogText] = useState('')
+  const [runtimeLogText, setRuntimeLogText] = useState('')
+  const [expandedBuildId, setExpandedBuildId] = useState<string | null>(null)
+  const [logTab, setLogTab] = useState<LogTab>('build')
+  const [workloads, setWorkloads] = useState<Workload[]>([])
+  const [selectedWorkload, setSelectedWorkload] = useState('app')
+  const [runtimeMeta, setRuntimeMeta] = useState('')
+  const [runtimeError, setRuntimeError] = useState('')
+  const [now, setNow] = useState(() => Date.now())
+  const logEndRef = useRef<HTMLPreElement>(null)
+  const runtimeLogEndRef = useRef<HTMLPreElement>(null)
+  const autoExpandedRef = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     const [a, r, b, st, inf] = await Promise.all([
@@ -81,14 +105,162 @@ export function ProjectPage() {
     }
   }, [status?.github_app_configured, installationId, repo, selectedRepo])
 
+  const activeBuild = useMemo(
+    () => builds.find((b) => b.status === 'pending' || b.status === 'running') ?? null,
+    [builds],
+  )
+  const expandedBuild = useMemo(
+    () => (expandedBuildId ? (builds.find((b) => b.id === expandedBuildId) ?? null) : null),
+    [builds, expandedBuildId],
+  )
+
+  // Auto-expand the in-progress deploy (once per build id).
   useEffect(() => {
-    const active = builds.some((b) => b.status === 'pending' || b.status === 'running')
-    if (!active) return
+    if (!activeBuild) return
+    if (autoExpandedRef.current === activeBuild.id) return
+    autoExpandedRef.current = activeBuild.id
+    setExpandedBuildId(activeBuild.id)
+    setLogTab('build')
+  }, [activeBuild])
+
+  useEffect(() => {
+    if (!activeBuild) return
     const t = setInterval(() => {
       void refresh().catch(() => {})
-    }, 2500)
+    }, 2000)
     return () => clearInterval(t)
-  }, [builds, refresh])
+  }, [activeBuild, refresh])
+
+  useEffect(() => {
+    if (!activeBuild) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [activeBuild])
+
+  useEffect(() => {
+    if (!expandedBuild || logTab !== 'build') {
+      if (!expandedBuild) setLogText('')
+      return
+    }
+    let cancelled = false
+    let stopStream: (() => void) | undefined
+    ;(async () => {
+      try {
+        const snap = await api.getBuildLogs(id, expandedBuild.id)
+        if (cancelled) return
+        setLogText(snap.log)
+        if (expandedBuild.status === 'pending' || expandedBuild.status === 'running') {
+          stopStream = api.streamBuildLogs(
+            id,
+            expandedBuild.id,
+            {
+              onLog: (chunk) => {
+                setLogText((prev) => prev + chunk)
+              },
+              onDone: () => {
+                void refresh().catch(() => {})
+              },
+            },
+            snap.offset,
+          )
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+      stopStream?.()
+    }
+  }, [id, expandedBuild?.id, expandedBuild?.status, logTab, refresh])
+
+  useEffect(() => {
+    if (!expandedBuildId || logTab !== 'runtime') {
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const list = await api.listWorkloads(id)
+        if (cancelled) return
+        setWorkloads(list)
+        setSelectedWorkload((prev) => {
+          if (list.some((w) => w.name === prev)) return prev
+          return list[0]?.name ?? 'app'
+        })
+      } catch (e) {
+        if (!cancelled) {
+          setRuntimeError(e instanceof Error ? e.message : 'Failed to list workloads')
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [id, expandedBuildId, logTab])
+
+  useEffect(() => {
+    if (!expandedBuildId || logTab !== 'runtime' || !selectedWorkload) {
+      if (logTab !== 'runtime') {
+        setRuntimeLogText('')
+        setRuntimeMeta('')
+        setRuntimeError('')
+      }
+      return
+    }
+    let cancelled = false
+    let stopStream: (() => void) | undefined
+    setRuntimeLogText('')
+    setRuntimeMeta('')
+    setRuntimeError('')
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/apps/${id}/workloads/${encodeURIComponent(selectedWorkload)}/logs?tailLines=200`,
+        )
+        const text = await res.text()
+        const data = text ? JSON.parse(text) : null
+        if (cancelled) return
+        if (!res.ok) {
+          setRuntimeError(data?.error ?? res.statusText)
+          return
+        }
+        // Stream live from the same point (includes recent history + follow).
+        stopStream = api.streamWorkloadLogs(id, selectedWorkload, {
+          onStatus: (info) => {
+            setRuntimeMeta(`${info.pod} · ${info.container}`)
+          },
+          onLog: (chunk) => {
+            setRuntimeLogText((prev) => prev + chunk)
+          },
+          onError: (message) => {
+            setRuntimeError(message)
+          },
+        })
+      } catch (e) {
+        if (!cancelled) {
+          setRuntimeError(e instanceof Error ? e.message : 'Failed to load runtime logs')
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+      stopStream?.()
+    }
+  }, [id, expandedBuildId, logTab, selectedWorkload])
+
+  useEffect(() => {
+    logEndRef.current?.scrollTo({ top: logEndRef.current.scrollHeight })
+  }, [logText])
+
+  useEffect(() => {
+    runtimeLogEndRef.current?.scrollTo({ top: runtimeLogEndRef.current.scrollHeight })
+  }, [runtimeLogText])
+
+  function toggleExpand(buildId: string) {
+    setExpandedBuildId((prev) => (prev === buildId ? null : buildId))
+    setLogTab('build')
+  }
 
   async function linkManualRepo(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -127,7 +299,11 @@ export function ProjectPage() {
     setBusy(true)
     setError('')
     try {
-      await api.triggerBuild(id)
+      const res = await api.triggerBuild(id)
+      autoExpandedRef.current = res.build_id
+      setExpandedBuildId(res.build_id)
+      setLogTab('build')
+      setLogText('')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to deploy')
@@ -150,6 +326,11 @@ export function ProjectPage() {
   const githubApp = status?.github_app_configured
   const installations = status?.github_installations ?? []
   const returnPath = `/projects/${id}`
+  const deployDisabled = busy || !repo || !!activeBuild
+  const elapsed =
+    expandedBuild && (expandedBuild.status === 'pending' || expandedBuild.status === 'running')
+      ? Math.max(0, Math.floor((now - new Date(expandedBuild.created_at).getTime()) / 1000))
+      : null
 
   return (
     <>
@@ -164,8 +345,13 @@ export function ProjectPage() {
               Open
             </a>
           )}
-          <button className="btn btn-primary" type="button" onClick={() => void deploy()} disabled={busy || !repo}>
-            {busy ? 'Working…' : 'Deploy'}
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={() => void deploy()}
+            disabled={deployDisabled}
+          >
+            {activeBuild ? 'Deploying…' : busy ? 'Working…' : 'Deploy'}
           </button>
         </div>
       </div>
@@ -333,7 +519,7 @@ export function ProjectPage() {
         ) : (
           <ul className="build-list">
             {infra.dependencies.map((d) => (
-              <li key={d.name} className="build-item">
+              <li key={d.name} className="build-item dep-item">
                 <div>
                   <div style={{ textTransform: 'capitalize' }}>{d.type}</div>
                   <div className="muted" style={{ marginTop: '0.25rem' }}>
@@ -376,18 +562,97 @@ export function ProjectPage() {
           <p className="muted">No builds yet. Link a repo and click Deploy.</p>
         ) : (
           <ul className="build-list">
-            {builds.map((b) => (
-              <li key={b.id} className="build-item">
-                <StatusBadge status={b.status} />
-                <div>
-                  <div className="mono">{b.image || '—'}</div>
-                  <div className="muted" style={{ fontSize: '0.8rem' }}>
-                    {formatTime(b.created_at)}
-                  </div>
-                </div>
-                <span className="mono muted">{b.id.slice(0, 8)}</span>
-              </li>
-            ))}
+            {builds.map((b) => {
+              const open = expandedBuildId === b.id
+              return (
+                <li key={b.id} className={`build-card${open ? ' build-card-open' : ''}`}>
+                  <button
+                    type="button"
+                    className="build-card-toggle"
+                    aria-expanded={open}
+                    onClick={() => toggleExpand(b.id)}
+                  >
+                    <StatusBadge status={b.status} />
+                    <div className="build-card-meta">
+                      <div className="mono">{b.image || '—'}</div>
+                      <div className="muted" style={{ fontSize: '0.8rem' }}>
+                        {formatTime(b.created_at)} · <span className="mono">{b.id.slice(0, 8)}</span>
+                      </div>
+                    </div>
+                    <BuildPhases build={b} compact />
+                    <span className={`build-chevron${open ? ' open' : ''}`} aria-hidden>
+                      ▾
+                    </span>
+                  </button>
+                  {open ? (
+                    <div className="build-card-body">
+                      <BuildPhases
+                        build={b}
+                        elapsedSeconds={expandedBuild?.id === b.id ? elapsed : null}
+                      />
+                      <div className="log-tabs" role="tablist">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={logTab === 'build'}
+                          className={logTab === 'build' ? 'active' : undefined}
+                          onClick={() => setLogTab('build')}
+                        >
+                          Build
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={logTab === 'runtime'}
+                          className={logTab === 'runtime' ? 'active' : undefined}
+                          onClick={() => setLogTab('runtime')}
+                        >
+                          Runtime
+                        </button>
+                      </div>
+                      {logTab === 'build' ? (
+                        <pre className="build-log" ref={logEndRef}>
+                          {logText || <span className="muted">No log output yet.</span>}
+                        </pre>
+                      ) : (
+                        <div className="runtime-logs">
+                          <div className="runtime-logs-toolbar">
+                            <label htmlFor={`workload-${b.id}`}>
+                              Service
+                              <select
+                                id={`workload-${b.id}`}
+                                value={selectedWorkload}
+                                onChange={(e) => setSelectedWorkload(e.target.value)}
+                              >
+                                {(workloads.length > 0
+                                  ? workloads
+                                  : [{ name: 'app', component: 'application', ready: false }]
+                                ).map((w) => (
+                                  <option key={w.name} value={w.name}>
+                                    {w.name}
+                                    {w.type && w.type !== 'app' ? ` (${w.type})` : ''}
+                                    {w.ready ? '' : w.source === 'live' ? ' · not ready' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            {runtimeMeta ? (
+                              <span className="mono muted runtime-meta">{runtimeMeta}</span>
+                            ) : null}
+                          </div>
+                          {runtimeError ? <p className="error">{runtimeError}</p> : null}
+                          <pre className="build-log" ref={runtimeLogEndRef}>
+                            {runtimeLogText || (
+                              <span className="muted">Waiting for runtime logs…</span>
+                            )}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>

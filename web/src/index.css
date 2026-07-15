@@ -384,6 +384,242 @@ button {
   white-space: nowrap;
 }
 
+.dep-item {
+  cursor: default;
+}
+
+.build-card {
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.build-card-open {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.build-card-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0.75rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.build-card-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.build-card-meta {
+  min-width: 0;
+}
+
+.build-card-meta .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.build-chevron {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  transition: transform 0.15s ease;
+  justify-self: end;
+}
+
+.build-chevron.open {
+  transform: rotate(180deg);
+}
+
+.build-card-body {
+  padding: 0 0.85rem 0.9rem;
+  border-top: 1px solid var(--border);
+  animation: build-expand 0.18s ease;
+}
+
+@keyframes build-expand {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.build-phases {
+  margin-top: 0.85rem;
+}
+
+.build-phases-compact {
+  margin-top: 0;
+  justify-self: end;
+}
+
+.phase-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+}
+
+.phase-steps-compact {
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+}
+
+.phase-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.phase-compact {
+  gap: 0.25rem;
+  font-size: 0.72rem;
+}
+
+.phase-compact-label {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .phase-compact-label {
+    display: inline;
+  }
+}
+
+.phase-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.phase-active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.phase-active .phase-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.phase-done {
+  color: var(--text);
+}
+
+.phase-done .phase-dot {
+  background: var(--success);
+}
+
+.phase-failed {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.phase-failed .phase-dot {
+  background: var(--danger);
+}
+
+.phase-elapsed {
+  margin: 0.65rem 0 0;
+  font-size: 0.85rem;
+}
+
+.log-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0.85rem 0 0.55rem;
+}
+
+.log-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.log-tabs button:hover,
+.log-tabs button.active {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.log-tabs button.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.build-log {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.build-log-empty {
+  display: flex;
+  align-items: center;
+  min-height: 4.5rem;
+}
+
+.runtime-logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.55rem;
+}
+
+.runtime-logs-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.runtime-logs-toolbar select {
+  min-width: 10rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.runtime-meta {
+  font-size: 0.78rem;
+}
+
 .tabs {
   display: flex;
   gap: 0.35rem;
