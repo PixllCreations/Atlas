@@ -16,8 +16,6 @@ coverage.out
 !.env.example
 *.pem
 
-
-
 # OS
 .DS_Store
 Thumbs.db

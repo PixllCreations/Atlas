@@ -1,6 +1,9 @@
 package runtime
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestDesiredBuildJob(t *testing.T) {
 	job := desiredBuildJob(BuildJobOptions{
@@ -111,5 +114,27 @@ func TestValidateBuildJobOptions(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("validateBuildJobOptions() = %v, want nil", err)
+	}
+}
+
+func TestIsRetryableBuildJobError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "tls handshake timeout", err: errors.New("Get \"https://kube\": net/http: TLS handshake timeout"), want: true},
+		{name: "http2 connection lost", err: errors.New("http2: client connection lost"), want: true},
+		{name: "connection reset", err: errors.New("read tcp: connection reset by peer"), want: true},
+		{name: "unexpected eof", err: errors.New("unexpected EOF"), want: true},
+		{name: "not found", err: errors.New("jobs.batch \"atlas-build-x\" not found"), want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetryableBuildJobError(tc.err); got != tc.want {
+				t.Fatalf("isRetryableBuildJobError(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }

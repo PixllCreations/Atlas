@@ -81,10 +81,7 @@ Stream build logs via SSE. Runtime tab streams selected workload pod logs (`app`
 ## Out of scope / later
 
 - Multi-tenant console auth  
-- PR preview environments  
-- Custom domains beyond `ATLAS_INGRESS_DOMAIN`  
-- Helm / raw YAML import  
-- docker-compose as the domain model  
+- PR preview environments   
 - Redis / Postgres PVC persistence (ephemeral is fine for demos)
 
 ---

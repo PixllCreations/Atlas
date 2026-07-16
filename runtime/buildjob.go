@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -83,6 +85,14 @@ func (c *Client) WaitForBuildJob(ctx context.Context, namespace, buildID string,
 	for {
 		job, err := jobs.Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
+			if isRetryableBuildJobError(err) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+					continue
+				}
+			}
 			return fmt.Errorf("get build job: %w", err)
 		}
 
@@ -117,6 +127,32 @@ func (c *Client) WaitForBuildJob(ctx context.Context, namespace, buildID string,
 		case <-ticker.C:
 		}
 	}
+}
+
+func isRetryableBuildJobError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"tls handshake timeout",
+		"http2: client connection lost",
+		"client connection lost",
+		"timeout awaiting response headers",
+		"i/o timeout",
+		"connection reset by peer",
+		"unexpected eof",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateBuildJobOptions(opts BuildJobOptions) error {
