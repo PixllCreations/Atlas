@@ -249,7 +249,7 @@ func TestWorker_ProcessPendingBuildJobPath(t *testing.T) {
 		"app-1": {URL: "https://github.com/user/repo", Branch: "main"},
 	}
 	store.apps = map[string]app.App{
-		"app-1": {ID: "app-1", Name: "portfolio"},
+		"app-1": {ID: "app-1", Name: "portfolio", Environment: map[string]string{"API_TOKEN": "example-token"}},
 	}
 
 	deployer := &fakeDeployer{}
@@ -315,7 +315,7 @@ dependencies:
 			for _, e := range d.Env {
 				env[e.Name] = e.Value
 			}
-			if env["PORT"] != "8080" || env["REDIS_URL"] != "redis://redis:6379" {
+			if env["API_TOKEN"] != "example-token" || env["PORT"] != "8080" || env["REDIS_URL"] != "redis://redis:6379" {
 				t.Fatalf("app env = %v", env)
 			}
 		}

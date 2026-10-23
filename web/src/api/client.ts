@@ -126,6 +126,10 @@ export const api = {
     request<App>('/apps', { method: 'POST', body: JSON.stringify({ name }) }),
   deleteApp: (id: string) => request<void>(`/apps/${id}`, { method: 'DELETE' }),
 
+  getEnvironment: (id: string) => request<Record<string, string>>(`/apps/${id}/environment`),
+  saveEnvironment: (id: string, env: Record<string, string>) =>
+    request<void>(`/apps/${id}/environment`, { method: 'PUT', body: JSON.stringify(env) }),
+
   getRepo: async (id: string): Promise<Repo | null> => {
     const res = await fetch(`/apps/${id}/repo`)
     if (res.status === 404) return null

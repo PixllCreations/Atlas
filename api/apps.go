@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 
@@ -51,6 +52,8 @@ func RegisterApps(mux *http.ServeMux, st *store.Store, deployer build.Deployer, 
 	mux.HandleFunc("GET /apps/{id}", h.get)
 	mux.HandleFunc("DELETE /apps/{id}", h.delete)
 	mux.HandleFunc("GET /apps/{id}/infrastructure", h.infrastructure)
+	mux.HandleFunc("GET /apps/{id}/environment", h.getEnvironment)
+	mux.HandleFunc("PUT /apps/{id}/environment", h.putEnvironment)
 }
 
 func (h *appsHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -237,4 +240,50 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func (h *appsHandler) getEnvironment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	a, err := h.store.GetApp(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "app not found")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "failed to get environment")
+		return
+	}
+	env := a.Environment
+	if env == nil {
+		env = map[string]string{}
+	}
+	writeJSON(w, 200, env)
+}
+
+func (h *appsHandler) putEnvironment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var env map[string]string
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 512*1024))
+	if err := dec.Decode(&env); err != nil || env == nil {
+		writeError(w, 400, "expected an environment variable object")
+		return
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		writeError(w, 400, "invalid JSON body")
+		return
+	}
+	if err := plan.ValidateEnvironment(env); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	err := h.store.UpdateAppEnvironment(r.Context(), r.PathValue("id"), env)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "app not found")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "failed to save environment")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

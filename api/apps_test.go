@@ -89,6 +89,35 @@ func TestAppsCRUD(t *testing.T) {
 		t.Fatalf("list apps missing %s: %+v", created.ID, apps)
 	}
 
+	for _, body := range []string{`{"TOKEN":"example","EMPTY":""}`, `{}`} {
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/apps/"+created.ID+"/environment", strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("save environment status = %d", resp.StatusCode)
+		}
+		resp, err = http.Get(ts.URL + "/apps/" + created.ID + "/environment")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got, want map[string]string
+		decodeJSON(t, resp.Body, &got)
+		resp.Body.Close()
+		if err := json.Unmarshal([]byte(body), &want); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(want) {
+			t.Fatal("environment replacement failed")
+		}
+		for key, value := range want {
+			if got[key] != value {
+				t.Fatal("environment value mismatch")
+			}
+		}
+	}
 	deleteApp(t, ts, created.ID)
 	assertAppNotFound(t, ts, created.ID)
 }
@@ -225,7 +254,7 @@ func containsApp(apps []appResponse, id string) bool {
 func ensureAppsTable(t *testing.T, ctx context.Context, dsn string) {
 	t.Helper()
 
-	for _, name := range []string{"001_apps.sql", "006_app_port.sql", "007_deployment_snapshot.sql", "008_drop_app_port.sql"} {
+	for _, name := range []string{"001_apps.sql", "006_app_port.sql", "007_deployment_snapshot.sql", "008_drop_app_port.sql", "010_app_environment.sql"} {
 		sql, err := os.ReadFile("../store/migrations/" + name)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
@@ -243,5 +272,20 @@ func ensureAppsTable(t *testing.T, ctx context.Context, dsn string) {
 			t.Fatalf("apply migration %s: %v", name, err)
 		}
 		conn.Close(ctx)
+	}
+}
+
+func TestEnvironmentRejectsInvalidInput(t *testing.T) {
+	ts := testAppsServer(t, nil)
+	for _, body := range []string{`null`, `[]`, `{"PORT":"9000"}`, `{"BAD-NAME":"x"}`, `{"TOKEN":"x"} {}`} {
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/apps/test/environment", strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d for invalid input", resp.StatusCode)
+		}
 	}
 }

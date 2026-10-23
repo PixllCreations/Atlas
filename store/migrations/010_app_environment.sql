@@ -1,0 +1,1 @@
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS environment JSONB NOT NULL DEFAULT '{}'::jsonb;

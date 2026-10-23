@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -45,6 +46,7 @@ type BuildOptions struct {
 	Image         string
 	IngressDomain string
 	Config        config.Config
+	Environment   map[string]string
 }
 
 // NamespaceName returns the Atlas-managed namespace for a project.
@@ -61,6 +63,9 @@ func Build(opts BuildOptions) (DeploymentPlan, error) {
 		return DeploymentPlan{}, fmt.Errorf("image is required")
 	}
 
+	if err := ValidateEnvironment(opts.Environment); err != nil {
+		return DeploymentPlan{}, err
+	}
 	ns := NamespaceName(opts.ProjectName)
 	port := opts.Config.App.Port
 
@@ -86,6 +91,13 @@ func Build(opts BuildOptions) (DeploymentPlan, error) {
 		case config.DependencyRedis:
 			envMap["REDIS_URL"] = fmt.Sprintf("redis://%s:6379", name)
 		}
+	}
+
+	for key, value := range opts.Environment {
+		if _, reserved := envMap[key]; reserved {
+			return DeploymentPlan{}, fmt.Errorf("environment variable %s is managed by Atlas", key)
+		}
+		envMap[key] = strings.ReplaceAll(value, "$", "$$")
 	}
 
 	envKeys := make([]string, 0, len(envMap))

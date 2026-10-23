@@ -233,6 +233,7 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		Image:         remote,
 		IngressDomain: w.cfg.IngressDomain,
 		Config:        cfg,
+		Environment:   a.Environment,
 	})
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)

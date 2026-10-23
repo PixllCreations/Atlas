@@ -82,7 +82,8 @@ UI routes use `/projects/...` and `/system` so they do not collide with the JSON
 | 5 | `atlas.yaml`, project namespaces, Redis provisioner, plan reconcile | Done |
 | 6 | Deploy phases + live build log streaming (SSE) | Done |
 | 7 | Runtime pod logs per workload/service | Done |
-| 8+ | User env / secrets UI, more deps (Postgres…) | Planned — see [TODO.md](TODO.md) |
+| 8 | Project runtime environment variables | Done |
+| 9+ | Secret management, more deps (Postgres…) | Planned — see [TODO.md](TODO.md) |
 
 ## Repository requirements
 
@@ -250,3 +251,15 @@ make web-dev   # Vite (API on :8080)
 ## License
 
 Private — personal portfolio project.
+
+### Project environment variables
+
+In **Project → Settings → Environment variables**, add, edit, or remove variables and save.
+The saved project configuration is read when a deployment starts and applied to the application container on that deployment. Deploy again after saving to update a running application.
+Variables are runtime-only; they are not Docker build arguments or available to build jobs.
+`PORT` and `REDIS_URL` are reserved for Atlas. Names use letters, numbers, and underscores and cannot start with a number. Empty values are supported.
+
+`GET /apps/{id}/environment` reads the project's variable map; `PUT /apps/{id}/environment` replaces it with a JSON object (use `{}` to remove all custom variables).
+Values are masked in the editor and excluded from project list responses and infrastructure snapshots. They are stored as plaintext in PostgreSQL and in Kubernetes container environment configuration; this feature is not an encrypted secret store. Console access grants access to these values.
+
+Apply migration `010_app_environment.sql` before running the updated API (`bash hack/migrate.sh` for the Compose stack).

@@ -4,6 +4,7 @@ import "time"
 
 // App is a deployable application registered with Atlas.
 type App struct {
+	Environment        map[string]string
 	ID                 string
 	Name               string
 	DeploymentSnapshot []byte // last successful deploy infrastructure JSON; nil if never deployed
