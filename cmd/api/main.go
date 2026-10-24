@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pixll/atlas/api"
 	"github.com/pixll/atlas/build"
@@ -50,7 +51,16 @@ func main() {
 		log.Printf("github app enabled (%s)", ghCfg.AppSlug)
 	}
 
+	rolloutTimeout := runtime.DefaultRolloutTimeout
+	if value := os.Getenv("ATLAS_ROLLOUT_TIMEOUT"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			log.Fatal("ATLAS_ROLLOUT_TIMEOUT must be a positive duration, for example 5m")
+		}
+		rolloutTimeout = parsed
+	}
 	workerCfg := build.WorkerConfig{
+		RolloutTimeout:     rolloutTimeout,
 		Registry:           os.Getenv("ATLAS_REGISTRY_URL"),
 		Namespace:          os.Getenv("ATLAS_K8S_NAMESPACE"),
 		IngressDomain:      os.Getenv("ATLAS_INGRESS_DOMAIN"),

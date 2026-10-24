@@ -1,14 +1,15 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 
 	"github.com/pixll/atlas/app"
+	"github.com/pixll/atlas/internal/redact"
 	"github.com/pixll/atlas/plan"
 	"github.com/pixll/atlas/runtime"
 	"github.com/pixll/atlas/store"
@@ -87,6 +88,11 @@ func (h *workloadsHandler) logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var sensitive []string
+	for _, value := range a.Environment {
+		sensitive = append(sensitive, value)
+	}
+	safe := func(text string) string { return redact.Text(text, sensitive...) }
 	ns := plan.NamespaceName(a.Name)
 	if !h.canAccessWorkload(r.Context(), a, ns, name) {
 		writeError(w, http.StatusNotFound, "workload not found")
@@ -104,13 +110,13 @@ func (h *workloadsHandler) logs(w http.ResponseWriter, r *http.Request) {
 	if !follow {
 		logText, pod, err := h.rt.SnapshotWorkloadLogs(r.Context(), ns, name, tail)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
+			writeError(w, http.StatusBadGateway, safe(err.Error()))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"workload": name,
 			"pod":      pod,
-			"log":      logText,
+			"log":      safe(logText),
 		})
 		return
 	}
@@ -123,7 +129,7 @@ func (h *workloadsHandler) logs(w http.ResponseWriter, r *http.Request) {
 
 	ls, err := h.rt.FollowWorkloadLogs(r.Context(), ns, name, tail)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, safe(err.Error()))
 		return
 	}
 	defer ls.Stream.Close()
@@ -146,24 +152,21 @@ func (h *workloadsHandler) logs(w http.ResponseWriter, r *http.Request) {
 		"container": ls.Container,
 	})
 
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := ls.Stream.Read(buf)
-		if n > 0 {
-			writeSSE("log", map[string]string{"chunk": string(buf[:n])})
-		}
-		if readErr == io.EOF {
-			writeSSE("done", map[string]string{"status": "eof"})
-			return
-		}
-		if readErr != nil {
-			if r.Context().Err() != nil {
-				return
-			}
-			writeSSE("error", map[string]string{"error": readErr.Error()})
-			return
-		}
+	// Redact complete lines so a network read boundary cannot split a credential.
+	filter := redact.LineFilter{Values: sensitive}
+	scanner := bufio.NewScanner(ls.Stream)
+	scanner.Buffer(make([]byte, 4096), 256*1024)
+	for scanner.Scan() {
+		writeSSE("log", map[string]string{"chunk": filter.Text(scanner.Text()) + "\n"})
 	}
+	if scanner.Err() != nil {
+		if r.Context().Err() == nil {
+			writeSSE("error", map[string]string{"error": "Runtime log stream ended or exceeded the safe line limit."})
+		}
+		return
+	}
+	writeSSE("done", map[string]string{"status": "eof"})
+
 }
 
 func (h *workloadsHandler) loadApp(w http.ResponseWriter, r *http.Request) (app.App, bool) {

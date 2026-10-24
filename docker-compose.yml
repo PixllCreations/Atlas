@@ -27,6 +27,7 @@ services:
       - "${ATLAS_PORT:-8080}:8080"
     environment:
       ATLAS_PORT: "8080"
+      ATLAS_ROLLOUT_TIMEOUT: ${ATLAS_ROLLOUT_TIMEOUT:-5m}
       ATLAS_DATABASE_URL: postgres://atlas:${ATLAS_DB_PASSWORD:-atlas}@postgres:5432/atlas?sslmode=disable
       ATLAS_REGISTRY_URL: ${ATLAS_REGISTRY_URL:-atlas-registry:5000}
       ATLAS_WEBHOOK_SECRET: ${ATLAS_WEBHOOK_SECRET:-dev-webhook-secret}

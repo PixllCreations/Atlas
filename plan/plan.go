@@ -15,6 +15,7 @@ const ApplicationName = "app"
 
 // DeploymentPlan is the desired Kubernetes state derived from atlas.yaml.
 type DeploymentPlan struct {
+	Revision    string
 	ProjectID   string
 	ProjectName string
 	Namespace   string

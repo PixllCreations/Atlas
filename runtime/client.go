@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -10,7 +13,8 @@ import (
 
 // Client wraps a Kubernetes clientset for Atlas runtime operations.
 type Client struct {
-	clientset *kubernetes.Clientset
+	clientset  kubernetes.Interface
+	rolloutLog func(context.Context, string, string, *corev1.PodLogOptions) (string, error)
 }
 
 // New connects to a Kubernetes cluster using kubeconfig when set.

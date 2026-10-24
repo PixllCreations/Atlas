@@ -275,3 +275,37 @@ func getBuild(t *testing.T, ts *httptest.Server, appID, buildID string) buildRes
 	decodeJSON(t, resp.Body, &got)
 	return got
 }
+
+func TestBuildFailurePersistenceAndAPI(t *testing.T) {
+	st, ts := openBuildsTestServer(t)
+	a := createApp(t, ts, "rollout-failure-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	b, err := st.CreateBuild(context.Background(), a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := "New application revision did not become ready.\nPod: app-new\nExit code: 1"
+	if err := st.UpdateBuildFailure(context.Background(), b.ID, failure); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateBuildPhase(context.Background(), b.ID, build.PhaseDeploying); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateBuildStatus(context.Background(), b.ID, build.StatusFailed); err != nil {
+		t.Fatal(err)
+	}
+	got := getBuild(t, ts, a.ID, b.ID)
+	if got.Failure != failure || got.Status != "failed" || got.Phase != "deploying" {
+		t.Fatalf("failure not returned: %+v", got)
+	}
+	listed := listBuilds(t, ts, a.ID)
+	if len(listed) != 1 || listed[0].Failure != failure {
+		t.Fatal("failure missing from history")
+	}
+}
+
+func TestBuildResponseIncludesFailure(t *testing.T) {
+	b := toBuildResponse(build.Build{Status: build.StatusFailed, Phase: build.PhaseDeploying, Failure: "Pod: app-new; Exit code: 1"})
+	if b.Failure != "Pod: app-new; Exit code: 1" || b.Status != "failed" {
+		t.Fatal("missing failure details")
+	}
+}

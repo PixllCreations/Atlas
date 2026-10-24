@@ -14,7 +14,7 @@ var ErrBuildNotFound = errors.New("build not found")
 func scanBuild(row pgx.Row) (build.Build, error) {
 	var b build.Build
 	var phase, image, log string
-	err := row.Scan(&b.ID, &b.AppID, &b.Status, &phase, &image, &log, &b.CreatedAt, &b.UpdatedAt)
+	err := row.Scan(&b.ID, &b.AppID, &b.Status, &phase, &image, &log, &b.Failure, &b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return build.Build{}, err
 	}
@@ -24,7 +24,7 @@ func scanBuild(row pgx.Row) (build.Build, error) {
 	return b, nil
 }
 
-const buildCols = `id, app_id, status, phase, image, log, created_at, updated_at`
+const buildCols = `id, app_id, status, phase, image, log, failure, created_at, updated_at`
 
 func (s *Store) CreateBuild(ctx context.Context, appID string) (build.Build, error) {
 	const q = `
@@ -153,6 +153,18 @@ func (s *Store) AppendBuildLog(ctx context.Context, id string, chunk string) err
 	tag, err := s.pool.Exec(ctx, q, id, chunk, maxLog)
 	if err != nil {
 		return fmt.Errorf("append build log: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrBuildNotFound
+	}
+	return nil
+}
+
+// UpdateBuildFailure persists already-redacted diagnostics independently of the bounded log.
+func (s *Store) UpdateBuildFailure(ctx context.Context, id, failure string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE builds SET failure = $2, updated_at = now() WHERE id = $1`, id, failure)
+	if err != nil {
+		return fmt.Errorf("update build failure: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrBuildNotFound

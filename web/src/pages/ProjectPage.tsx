@@ -10,6 +10,7 @@ import {
   type Status,
   type Workload,
 } from '../api/client'
+import { DeploymentFailure } from '../components/DeploymentFailure'
 import { BuildPhases } from '../components/BuildPhases'
 import { formatTime, StatusBadge } from '../components/StatusBadge'
 import { appPublicURL } from '../lib/urls'
@@ -590,6 +591,7 @@ export function ProjectPage() {
                         build={b}
                         elapsedSeconds={expandedBuild?.id === b.id ? elapsed : null}
                       />
+                      <DeploymentFailure failure={b.failure} />
                       <div className="log-tabs" role="tablist">
                         <button
                           type="button"

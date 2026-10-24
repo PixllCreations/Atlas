@@ -15,6 +15,7 @@ const defaultContainerPort int32 = 80
 
 // DeployOptions configures a Deployment for an app or dependency.
 type DeployOptions struct {
+	Revision    string
 	Namespace   string
 	Name        string
 	Image       string
@@ -63,6 +64,10 @@ func (c *Client) EnsureDeployment(ctx context.Context, opts DeployOptions) error
 
 	existing.Labels = MergeLabels(existing.Labels, dep.Labels)
 	existing.Spec.Template.Labels = MergeLabels(existing.Spec.Template.Labels, dep.Spec.Template.Labels)
+	existing.Spec.Template.Annotations = MergeLabels(existing.Spec.Template.Annotations, dep.Spec.Template.Annotations)
+	if opts.Revision != "" {
+		existing.Spec.MinReadySeconds = 10
+	}
 	existing.Spec.Template.Spec.Containers[0].Image = opts.Image
 	existing.Spec.Template.Spec.Containers[0].Ports = containerPorts(opts.Port)
 	existing.Spec.Template.Spec.Containers[0].Env = opts.Env
@@ -91,19 +96,27 @@ func desiredDeployment(opts DeployOptions) *appsv1.Deployment {
 	labels["app"] = opts.Name
 	labels = MergeLabels(labels, opts.Labels)
 
+	annotations := map[string]string{}
+	minReady := int32(0)
+	if opts.Revision != "" {
+		annotations[RevisionAnnotation] = opts.Revision
+		minReady = 10
+	}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   opts.Name,
 			Labels: labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: int32Ptr(1),
+			Replicas:        int32Ptr(1),
+			MinReadySeconds: minReady,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": opts.Name},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels:      labels,
+					Annotations: annotations,
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{

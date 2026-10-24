@@ -262,4 +262,14 @@ Variables are runtime-only; they are not Docker build arguments or available to 
 `GET /apps/{id}/environment` reads the project's variable map; `PUT /apps/{id}/environment` replaces it with a JSON object (use `{}` to remove all custom variables).
 Values are masked in the editor and excluded from project list responses and infrastructure snapshots. They are stored as plaintext in PostgreSQL and in Kubernetes container environment configuration; this feature is not an encrypted secret store. Console access grants access to these values.
 
-Apply migration `010_app_environment.sql` before running the updated API (`bash hack/migrate.sh` for the Compose stack).
+Migration `010_app_environment.sql` applies automatically on API container startup. Apply it manually (`bash hack/migrate.sh`) when running the API binary directly.
+
+### Deployment readiness and failures
+
+Atlas keeps the Deploying stage running after Kubernetes accepts the resources. Each application pod template is stamped with the build ID. Atlas waits for that revision's owned ReplicaSet and pods, the observed Deployment generation, all desired updated replicas, and availability. Application revisions must remain ready for 10 seconds (`minReadySeconds`) before success. An old healthy revision cannot satisfy the new rollout.
+
+`ATLAS_ROLLOUT_TIMEOUT` sets the rollout deadline (Go duration, default `5m`). Crash loops, nonzero container exits, image pull failures and container configuration errors fail Deploying; previous build/push stages stay successful. Failed rollout diagnostics are persisted separately from the bounded build log and returned as `failure` on build list/detail APIs. The console shows pod/container status, relevant events, and a bounded previous/current log tail where available. When an older ReplicaSet remains available, the failure explains that it may still serve traffic. Atlas does not automatically roll back.
+
+Diagnostics redact known environment values and common credential patterns before persistence. Log tails are withheld for pods using externally sourced environment values; Atlas does not fetch Kubernetes Secrets for diagnosis. Missing log access retains the pod status and events. Kubernetes permissions must include reading Deployments, ReplicaSets, pods, events, and pod logs. Readiness follows the workload's Kubernetes readiness settings; without an application readiness probe, it establishes container availability rather than application-level health. Failures occurring after rollout success require ongoing monitoring.
+
+Migration `011_build_failure.sql` applies on API container startup after rebuilding the image. Run `bash hack/migrate.sh` first when launching the API binary directly.

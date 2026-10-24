@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +15,7 @@ import (
 	"github.com/pixll/atlas/config"
 	"github.com/pixll/atlas/dependency"
 	depcredis "github.com/pixll/atlas/dependency/redis"
+	"github.com/pixll/atlas/internal/redact"
 	"github.com/pixll/atlas/plan"
 	"github.com/pixll/atlas/runtime"
 )
@@ -23,6 +25,7 @@ type Store interface {
 	UpdateBuildStatus(ctx context.Context, id string, status Status) (Build, error)
 	UpdateBuildPhase(ctx context.Context, id string, phase Phase) (Build, error)
 	UpdateBuildImage(ctx context.Context, id string, image string) (Build, error)
+	UpdateBuildFailure(ctx context.Context, id, failure string) error
 	AppendBuildLog(ctx context.Context, id string, chunk string) error
 	GetRepo(ctx context.Context, appID string) (app.Repo, error)
 	GetApp(ctx context.Context, id string) (app.App, error)
@@ -42,6 +45,7 @@ type Deployer interface {
 	EnsureNamespace(ctx context.Context, opts runtime.NamespaceOptions) error
 	DeleteNamespace(ctx context.Context, name string) error
 	EnsureDeployment(ctx context.Context, opts runtime.DeployOptions) error
+	WaitForRollout(ctx context.Context, opts runtime.RolloutOptions) error
 	EnsureService(ctx context.Context, opts runtime.ServiceOptions) error
 	EnsureIngress(ctx context.Context, opts runtime.IngressOptions) error
 	DeleteDeployment(ctx context.Context, namespace, name string) error
@@ -53,6 +57,7 @@ type Deployer interface {
 
 // WorkerConfig holds runtime settings for the build worker.
 type WorkerConfig struct {
+	RolloutTimeout     time.Duration
 	Registry           string
 	Namespace          string // system/build namespace (ATLAS_K8S_NAMESPACE)
 	IngressDomain      string
@@ -131,7 +136,10 @@ func (w *Worker) Process(ctx context.Context, buildID string) error {
 	}
 
 	if err := w.execute(ctx, b); err != nil {
-		_ = w.appendLog(ctx, buildID, "error: "+err.Error()+"\n")
+		safe := w.redactDiagnostic(ctx, buildID, err.Error())
+		err = fmt.Errorf("%s", safe)
+		_ = w.store.UpdateBuildFailure(ctx, buildID, safe)
+		_ = w.appendLog(ctx, buildID, "error: "+safe+"\n")
 		if _, updateErr := w.store.UpdateBuildStatus(ctx, buildID, StatusFailed); updateErr != nil {
 			return fmt.Errorf("run build: %w (mark failed: %v)", err, updateErr)
 		}
@@ -141,7 +149,7 @@ func (w *Worker) Process(ctx context.Context, buildID string) error {
 	if _, err := w.store.UpdateBuildStatus(ctx, buildID, StatusSucceeded); err != nil {
 		return fmt.Errorf("mark succeeded: %w", err)
 	}
-	_ = w.appendLog(ctx, buildID, "build succeeded\n")
+	_ = w.appendLog(ctx, buildID, "completed successfully\n")
 	return nil
 }
 
@@ -197,15 +205,20 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		if err := w.runJobBuild(ctx, b, repo, cloneURL, remote); err != nil {
 			return err
 		}
-		_ = w.appendLog(ctx, b.ID, "image build complete: "+remote+"\n")
+		if err := w.setPhase(ctx, b.ID, PhasePushing); err != nil {
+			return err
+		}
+		_ = w.appendLog(ctx, b.ID, "image build and push complete: "+remote+"\n")
 	} else {
 		_ = w.appendLog(ctx, b.ID, "building image on host\n")
 		if err := w.buildImage(ctx, src, tag); err != nil {
 			return err
 		}
 		if w.cfg.Registry == "" {
-			_ = w.appendLog(ctx, b.ID, "no registry configured; skipping push/deploy\n")
-			return nil
+			if err := w.setPhase(ctx, b.ID, PhasePushing); err != nil {
+				return err
+			}
+			return fmt.Errorf("no registry configured; image was built but cannot be pushed or deployed")
 		}
 		if err := w.setPhase(ctx, b.ID, PhasePushing); err != nil {
 			return err
@@ -239,10 +252,25 @@ func (w *Worker) execute(ctx context.Context, b Build) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 
+	p.Revision = b.ID
 	if err := w.ApplyPlan(ctx, p); err != nil {
 		return err
 	}
 
+	if w.deployer == nil {
+		return fmt.Errorf("runtime deployment unavailable; image was built but not deployed")
+	}
+	_ = w.appendLog(ctx, b.ID, "Kubernetes resources applied; waiting for new revision to become available\n")
+	var sensitive []string
+	for _, value := range a.Environment {
+		sensitive = append(sensitive, value)
+	}
+	if err := w.deployer.WaitForRollout(ctx, runtime.RolloutOptions{
+		Namespace: p.Namespace, Name: p.Application.Name, Revision: b.ID, Image: remote,
+		Timeout: w.cfg.RolloutTimeout, SensitiveValues: sensitive,
+	}); err != nil {
+		return err
+	}
 	w.cleanupLegacyResources(ctx, a.Name)
 
 	if snap, err := encodeSnapshot(SnapshotFromPlan(p)); err == nil {
@@ -265,7 +293,7 @@ func (w *Worker) setPhase(ctx context.Context, buildID string, phase Phase) erro
 }
 
 func (w *Worker) appendLog(ctx context.Context, buildID, chunk string) error {
-	return w.store.AppendBuildLog(ctx, buildID, chunk)
+	return w.store.AppendBuildLog(ctx, buildID, w.redactDiagnostic(ctx, buildID, chunk))
 }
 
 func (w *Worker) cloneURL(ctx context.Context, repo app.Repo) (string, error) {
@@ -297,7 +325,14 @@ func (w *Worker) runJobBuild(ctx context.Context, b Build, repo app.Repo, cloneU
 	}
 
 	var last string
+	pushing := false
+	var phaseErr error
 	if err := w.deployer.WaitForBuildJob(ctx, w.cfg.Namespace, b.ID, func(full string) {
+		if !pushing && strings.Contains(full, "Pushing image") {
+			phaseErr = w.setPhase(ctx, b.ID, PhasePushing)
+			pushing = true
+		}
+		full = w.redactDiagnostic(ctx, b.ID, full)
 		if full == "" || full == last {
 			return
 		}
@@ -310,9 +345,24 @@ func (w *Worker) runJobBuild(ctx context.Context, b Build, repo app.Repo, cloneU
 	}); err != nil {
 		return fmt.Errorf("build job: %w", err)
 	}
+	if phaseErr != nil {
+		return phaseErr
+	}
 	return nil
 }
 
 func imageTag(b Build) string {
 	return fmt.Sprintf("atlas/%s:%s", b.AppID, b.ID)
+}
+
+func (w *Worker) redactDiagnostic(ctx context.Context, buildID, text string) string {
+	var values []string
+	if b, err := w.store.GetBuild(ctx, buildID); err == nil {
+		if a, err := w.store.GetApp(ctx, b.AppID); err == nil {
+			for _, v := range a.Environment {
+				values = append(values, v)
+			}
+		}
+	}
+	return redact.Text(text, values...)
 }

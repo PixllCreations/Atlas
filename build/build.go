@@ -31,6 +31,7 @@ type Build struct {
 	Phase     Phase
 	Image     string
 	Log       string
+	Failure   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

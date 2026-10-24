@@ -20,6 +20,7 @@ export type Build = {
   app_id: string
   status: 'pending' | 'running' | 'succeeded' | 'failed' | string
   phase: BuildPhase
+  failure?: string
   image: string
   created_at: string
   updated_at: string

@@ -50,6 +50,7 @@ func (w *Worker) ApplyPlan(ctx context.Context, p plan.DeploymentPlan) error {
 	}
 
 	if err := w.deployer.EnsureDeployment(ctx, runtime.DeployOptions{
+		Revision:    p.Revision,
 		Namespace:   p.Namespace,
 		Name:        p.Application.Name,
 		Image:       p.Application.Image,

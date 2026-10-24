@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,7 +127,7 @@ func writeAtlasYAMLClone(t *testing.T, yaml string) func(context.Context, string
 	}
 }
 
-func TestWorker_ProcessPendingBuild(t *testing.T) {
+func TestWorker_ImageWithoutRuntimeIsNotSuccessful(t *testing.T) {
 	now := time.Now()
 	store := newFakeBuildStore(Build{
 		ID:        "build-1",
@@ -146,23 +147,28 @@ func TestWorker_ProcessPendingBuild(t *testing.T) {
 	worker.buildImage = func(context.Context, string, string) error { return nil }
 	worker.pushImage = func(context.Context, string, string) error { return nil }
 
-	if err := worker.Process(context.Background(), "build-1"); err != nil {
-		t.Fatalf("Process() = %v, want nil", err)
+	if err := worker.Process(context.Background(), "build-1"); err == nil {
+		t.Fatal("expected missing runtime failure")
 	}
 
 	got := store.builds["build-1"]
-	if got.Status != StatusSucceeded {
+	if got.Status != StatusFailed {
 		t.Fatalf("status = %q, want %q", got.Status, StatusSucceeded)
 	}
 	if got.Image != "localhost:5000/atlas/app-1:build-1" {
 		t.Fatalf("image = %q, want %q", got.Image, "localhost:5000/atlas/app-1:build-1")
 	}
-	if store.snapshots["app-1"] == nil {
-		t.Fatal("expected deployment snapshot")
+	if store.snapshots["app-1"] != nil {
+		t.Fatal("failed deployment must not replace snapshot")
 	}
 }
 
 type fakeDeployer struct {
+	jobLogs          []string
+	jobErr           error
+	rolloutOpts      runtime.RolloutOptions
+	rolloutErr       error
+	onRollout        func()
 	buildJobOpts     runtime.BuildJobOptions
 	waitNS           string
 	waitBuildID      string
@@ -183,10 +189,15 @@ func (f *fakeDeployer) EnsureBuildJob(_ context.Context, opts runtime.BuildJobOp
 	return nil
 }
 
-func (f *fakeDeployer) WaitForBuildJob(_ context.Context, namespace, buildID string, _ func(string)) error {
+func (f *fakeDeployer) WaitForBuildJob(_ context.Context, namespace, buildID string, onLogs func(string)) error {
 	f.waitNS = namespace
 	f.waitBuildID = buildID
-	return nil
+	for _, output := range f.jobLogs {
+		if onLogs != nil {
+			onLogs(output)
+		}
+	}
+	return f.jobErr
 }
 
 func (f *fakeDeployer) TailBuildJobLogs(context.Context, string, string) (string, error) {
@@ -432,5 +443,88 @@ func TestWorker_ProcessBuildNotFound(t *testing.T) {
 	err := worker.Process(context.Background(), "missing")
 	if err == nil {
 		t.Fatal("Process() = nil, want error")
+	}
+}
+
+func (f *fakeBuildStore) UpdateBuildFailure(_ context.Context, id, failure string) error {
+	b := f.builds[id]
+	b.Failure = failure
+	f.builds[id] = b
+	return nil
+}
+func (f *fakeDeployer) WaitForRollout(_ context.Context, opts runtime.RolloutOptions) error {
+	f.rolloutOpts = opts
+	if f.onRollout != nil {
+		f.onRollout()
+	}
+	return f.rolloutErr
+}
+
+func TestWorkerRolloutOutcome(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ready", true: "crashed"}[failed], func(t *testing.T) {
+			st := newFakeBuildStore(Build{ID: "build-1", AppID: "app-1", Status: StatusPending})
+			st.apps = map[string]app.App{"app-1": {ID: "app-1", Name: "demo", Environment: map[string]string{"TOKEN": "private-runtime-value"}}}
+			st.repos = map[string]app.Repo{"app-1": {URL: "https://github.com/user/repo", Branch: "main"}}
+			st.snapshots["app-1"] = []byte("old snapshot")
+			d := &fakeDeployer{}
+			d.onRollout = func() {
+				b := st.builds["build-1"]
+				if b.Status != StatusRunning || b.Phase != PhaseDeploying {
+					t.Fatalf("not waiting in deploying: %+v", b)
+				}
+				if string(st.snapshots["app-1"]) != "old snapshot" {
+					t.Fatal("snapshot changed before readiness")
+				}
+			}
+			if failed {
+				d.rolloutErr = errors.New("New application revision did not become ready.\nPod: app-new\nReason: Error\nExit code: 1\nprivate-runtime-value")
+			}
+			w := NewWorker(st, WorkerConfig{Registry: "registry:5000", RolloutTimeout: time.Minute}, d, nil)
+			w.clone = writeAtlasYAMLClone(t, "")
+			err := w.Process(context.Background(), "build-1")
+			b := st.builds["build-1"]
+			if d.rolloutOpts.Revision != "build-1" || d.rolloutOpts.Timeout != time.Minute || d.rolloutOpts.Namespace != "atlas-demo" {
+				t.Fatal("missing rollout identity or timeout")
+			}
+			if failed {
+				if err == nil || b.Status != StatusFailed || b.Phase != PhaseDeploying {
+					t.Fatalf("failed rollout incorrectly reported: %+v, %v", b, err)
+				}
+				if strings.Contains(b.Log+b.Failure+err.Error(), "private-runtime-value") {
+					t.Fatal("secret was persisted/displayed")
+				}
+				if !strings.Contains(b.Failure, "Exit code: 1") {
+					t.Fatal("missing persisted diagnosis")
+				}
+				if string(st.snapshots["app-1"]) != "old snapshot" {
+					t.Fatal("failure overwrote last successful infrastructure")
+				}
+				if strings.Contains(b.Log, "deploy complete") {
+					t.Fatal("premature deployment success")
+				}
+			} else if err != nil || b.Status != StatusSucceeded || b.Failure != "" {
+				t.Fatalf("ready rollout: %+v %v", b, err)
+			}
+		})
+	}
+}
+
+func TestKanikoPushFailureIsSeparateFromBuilding(t *testing.T) {
+	st := newFakeBuildStore(Build{ID: "build-1", AppID: "app-1", Status: StatusPending})
+	st.apps = map[string]app.App{"app-1": {ID: "app-1", Name: "demo"}}
+	st.repos = map[string]app.Repo{"app-1": {URL: "https://github.com/user/repo", Branch: "main"}}
+	d := &fakeDeployer{jobLogs: []string{"building layers\nPushing image to registry\n"}, jobErr: errors.New("registry push denied")}
+	w := NewWorker(st, WorkerConfig{Registry: "registry:5000"}, d, nil)
+	w.clone = writeAtlasYAMLClone(t, "")
+	if err := w.Process(context.Background(), "build-1"); err == nil {
+		t.Fatal("expected push failure")
+	}
+	b := st.builds["build-1"]
+	if b.Status != StatusFailed || b.Phase != PhasePushing {
+		t.Fatalf("push failure wrongly assigned: %+v", b)
+	}
+	if len(d.deployments) > 0 || d.rolloutOpts.Revision != "" {
+		t.Fatal("failed push must not deploy")
 	}
 }

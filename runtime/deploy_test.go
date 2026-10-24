@@ -67,3 +67,14 @@ func TestNormalizeEnvDeterministic(t *testing.T) {
 		t.Fatalf("order = %+v", got)
 	}
 }
+
+func TestApplicationRevisionAndAvailabilityWindow(t *testing.T) {
+	dep := desiredDeployment(DeployOptions{Name: "app", Image: "img:new", Revision: "build-id"})
+	if dep.Spec.Template.Annotations[RevisionAnnotation] != "build-id" || dep.Spec.MinReadySeconds != 10 {
+		t.Fatal("missing revision identity or availability window")
+	}
+	redis := desiredDeployment(DeployOptions{Name: "redis", Image: "redis:7"})
+	if redis.Spec.MinReadySeconds != 0 {
+		t.Fatal("application rollout policy changed dependency")
+	}
+}
